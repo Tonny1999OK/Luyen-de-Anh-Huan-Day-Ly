@@ -20,8 +20,8 @@
     </a>
 
     <nav class="nav" aria-label="Điều hướng chính">
-      <button class="nav-link active" data-screen="home">Trang chủ</button>
-      <button class="nav-link" data-screen="dashboard">Thống kê</button>
+      <button class="nav-link active" data-screen="home" type="button">Trang chủ</button>
+      <button id="teacher-dashboard-button" class="nav-link" type="button">Giáo viên</button>
     </nav>
   </header>
 
@@ -69,7 +69,7 @@
           </div>
 
           <button class="primary-button" type="submit">Bắt đầu làm bài</button>
-          <button id="load-sample-button" class="text-button" type="button">Nạp dữ liệu điểm mẫu để xem thống kê</button>
+          <button id="home-teacher-button" class="text-button" type="button">Dành cho giáo viên · Xem bảng điểm</button>
         </form>
       </div>
 
@@ -195,7 +195,7 @@
           </div>
           <div class="result-actions">
             <button id="retry-button" class="secondary-button" type="button">Làm lại đề</button>
-            <button id="view-dashboard-button" class="primary-button compact" type="button">Xem thống kê</button>
+            <button id="view-dashboard-button" class="primary-button compact" type="button">Giáo viên xem bảng điểm</button>
           </div>
         </div>
         <div id="review-list" class="review-list"></div>
@@ -207,11 +207,12 @@
         <div>
           <span class="eyebrow dark">BẢNG ĐIỂM HỌC SINH</span>
           <h1>Thống kê kết quả luyện đề</h1>
-          <p>Dữ liệu được lưu trên trình duyệt đang sử dụng.</p>
+          <p id="dashboard-status">Dữ liệu được đồng bộ từ Supabase và chỉ tài khoản giáo viên được xem.</p>
         </div>
         <div class="dashboard-actions">
-          <button id="seed-dashboard-button" class="secondary-button" type="button">Nạp dữ liệu mẫu</button>
+          <button id="refresh-dashboard-button" class="secondary-button" type="button">Làm mới</button>
           <button id="export-button" class="primary-button compact" type="button">Xuất CSV</button>
+          <button id="logout-teacher-button" class="danger-button" type="button">Đăng xuất</button>
         </div>
       </div>
 
@@ -247,7 +248,6 @@
           <div class="filters">
             <input id="search-result" type="search" placeholder="Tìm tên học sinh..." />
             <select id="class-filter"><option value="">Tất cả lớp</option></select>
-            <button id="clear-results-button" class="danger-button" type="button">Xóa dữ liệu</button>
           </div>
         </div>
 
@@ -276,6 +276,101 @@
     </section>
   </main>
 
+  <div id="teacher-login-modal" class="modal" aria-hidden="true">
+    <div class="modal-backdrop" data-close-teacher-login></div>
+
+    <div
+      class="modal-card teacher-login-card"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="teacher-login-title"
+      aria-describedby="teacher-login-description"
+    >
+      <div class="teacher-login-brand" aria-hidden="true">
+        <span>H</span>
+      </div>
+
+      <div class="teacher-login-heading">
+        <span class="teacher-login-eyebrow">KHU VỰC QUẢN TRỊ</span>
+        <h2 id="teacher-login-title">Đăng nhập giáo viên</h2>
+        <p id="teacher-login-description">
+          Đăng nhập để xem bảng điểm và thống kê kết quả của học sinh.
+        </p>
+      </div>
+
+      <form id="teacher-login-form">
+        <label class="teacher-field" for="teacher-email">
+          <span>Email</span>
+          <span class="teacher-input-wrap">
+            <svg class="teacher-input-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 6.5h16v11H4z"></path>
+              <path d="m4.5 7 7.5 6 7.5-6"></path>
+            </svg>
+            <input
+              id="teacher-email"
+              type="email"
+              autocomplete="email"
+              inputmode="email"
+              placeholder="giaovien@gmail.com"
+              required
+            />
+          </span>
+        </label>
+
+        <label class="teacher-field" for="teacher-password">
+          <span>Mật khẩu</span>
+          <span class="teacher-input-wrap teacher-password-wrap">
+            <svg class="teacher-input-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+              <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
+            </svg>
+            <input
+              id="teacher-password"
+              type="password"
+              autocomplete="current-password"
+              placeholder="Nhập mật khẩu"
+              required
+            />
+            <button
+              id="toggle-teacher-password"
+              class="teacher-password-toggle"
+              type="button"
+              aria-label="Hiện mật khẩu"
+              aria-pressed="false"
+              title="Hiện mật khẩu"
+            >
+              <svg class="eye-icon eye-open" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
+                <circle cx="12" cy="12" r="2.5"></circle>
+              </svg>
+              <svg class="eye-icon eye-closed" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m3 3 18 18"></path>
+                <path d="M10.6 6.2A10.6 10.6 0 0 1 12 6c6 0 9.5 6 9.5 6a15.4 15.4 0 0 1-2.5 3.2"></path>
+                <path d="M6.2 6.2C3.8 7.8 2.5 12 2.5 12s3.5 6 9.5 6c1.4 0 2.6-.3 3.7-.8"></path>
+                <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"></path>
+              </svg>
+            </button>
+          </span>
+        </label>
+
+        <p id="teacher-login-error" class="teacher-login-error" role="alert" aria-live="polite"></p>
+
+        <div class="teacher-login-actions">
+          <button id="close-teacher-login" class="teacher-close-button" type="button">
+            Đóng
+          </button>
+          <button id="teacher-login-submit" class="teacher-submit-button" type="submit">
+            <span>Đăng nhập</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 12h14"></path>
+              <path d="m14 7 5 5-5 5"></path>
+            </svg>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <div id="confirm-modal" class="modal" aria-hidden="true">
     <div class="modal-backdrop" data-close-modal></div>
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
@@ -289,50 +384,9 @@
     </div>
   </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="supabase-config.js"></script>
-<script src="data.js"></script>
-<script src="app.js"></script>
-
-<div id="teacher-login-modal" class="modal" aria-hidden="true">
-  <div class="modal-backdrop"></div>
-
-  <div class="modal-card">
-    <h2>Đăng nhập giáo viên</h2>
-
-    <form id="teacher-login-form">
-      <label for="teacher-email">Email</label>
-
-      <input
-        id="teacher-email"
-        type="email"
-        autocomplete="email"
-        required
-      />
-
-      <label for="teacher-password">Mật khẩu</label>
-
-      <input
-        id="teacher-password"
-        type="password"
-        autocomplete="current-password"
-        required
-      />
-
-      <p id="teacher-login-error"></p>
-
-      <button type="submit">
-        Đăng nhập
-      </button>
-
-      <button
-        id="close-teacher-login"
-        type="button"
-      >
-        Đóng
-      </button>
-    </form>
-  </div>
-</div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="supabase-config.js"></script>
+  <script src="data.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>

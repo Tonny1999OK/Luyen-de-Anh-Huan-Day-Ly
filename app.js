@@ -100,6 +100,7 @@
     $("#teacher-dashboard-button")?.addEventListener("click", openTeacherAccess);
     $("#teacher-login-form")?.addEventListener("submit", handleTeacherLogin);
     $("#close-teacher-login")?.addEventListener("click", closeTeacherLoginModal);
+    $("#toggle-teacher-password")?.addEventListener("click", toggleTeacherPassword);
     $$('[data-close-teacher-login]').forEach((element) => {
       element.addEventListener("click", closeTeacherLoginModal);
     });
@@ -150,17 +151,61 @@
   function openTeacherLoginModal() {
     const modal = $("#teacher-login-modal");
     if (!modal) return;
-    $("#teacher-login-error").textContent = "";
+
+    const errorElement = $("#teacher-login-error");
+    if (errorElement) errorElement.textContent = "";
+
+    resetTeacherPasswordVisibility();
     modal.classList.add("open");
     modal.setAttribute("aria-hidden", "false");
-    window.setTimeout(() => $("#teacher-email")?.focus(), 50);
+
+    window.setTimeout(() => {
+      const emailInput = $("#teacher-email");
+      const passwordInput = $("#teacher-password");
+      if (emailInput?.value.trim()) passwordInput?.focus();
+      else emailInput?.focus();
+    }, 50);
   }
 
   function closeTeacherLoginModal() {
     const modal = $("#teacher-login-modal");
     if (!modal) return;
+
+    const passwordInput = $("#teacher-password");
+    const errorElement = $("#teacher-login-error");
+    if (passwordInput) passwordInput.value = "";
+    if (errorElement) errorElement.textContent = "";
+
+    resetTeacherPasswordVisibility();
     modal.classList.remove("open");
     modal.setAttribute("aria-hidden", "true");
+  }
+
+  function toggleTeacherPassword() {
+    const passwordInput = $("#teacher-password");
+    const toggleButton = $("#toggle-teacher-password");
+    if (!passwordInput || !toggleButton) return;
+
+    const willShowPassword = passwordInput.type === "password";
+    passwordInput.type = willShowPassword ? "text" : "password";
+    toggleButton.classList.toggle("is-visible", willShowPassword);
+    toggleButton.setAttribute("aria-pressed", String(willShowPassword));
+    toggleButton.setAttribute("aria-label", willShowPassword ? "Ẩn mật khẩu" : "Hiện mật khẩu");
+    toggleButton.setAttribute("title", willShowPassword ? "Ẩn mật khẩu" : "Hiện mật khẩu");
+    passwordInput.focus();
+    passwordInput.setSelectionRange(passwordInput.value.length, passwordInput.value.length);
+  }
+
+  function resetTeacherPasswordVisibility() {
+    const passwordInput = $("#teacher-password");
+    const toggleButton = $("#toggle-teacher-password");
+    if (passwordInput) passwordInput.type = "password";
+    if (toggleButton) {
+      toggleButton.classList.remove("is-visible");
+      toggleButton.setAttribute("aria-pressed", "false");
+      toggleButton.setAttribute("aria-label", "Hiện mật khẩu");
+      toggleButton.setAttribute("title", "Hiện mật khẩu");
+    }
   }
 
   async function handleTeacherLogin(event) {
@@ -178,7 +223,8 @@
 
     errorElement.textContent = "";
     submitButton.disabled = true;
-    submitButton.textContent = "Đang đăng nhập...";
+    submitButton.classList.add("is-loading");
+    submitButton.querySelector("span").textContent = "Đang đăng nhập...";
 
     try {
       const { data, error } = await window.supabaseClient.auth.signInWithPassword({ email, password });
@@ -194,7 +240,8 @@
       errorElement.textContent = "Email, mật khẩu hoặc quyền giáo viên không hợp lệ.";
     } finally {
       submitButton.disabled = false;
-      submitButton.textContent = "Đăng nhập";
+      submitButton.classList.remove("is-loading");
+      submitButton.querySelector("span").textContent = "Đăng nhập";
     }
   }
 
