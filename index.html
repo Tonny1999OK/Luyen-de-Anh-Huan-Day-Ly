@@ -32,8 +32,8 @@
           <span class="eyebrow">HỆ THỐNG LUYỆN ĐỀ VẬT LÍ THPT</span>
           <h1>Làm đề đúng cấu trúc.<br /><span>Biết rõ điểm yếu.</span></h1>
           <p>
-            Mô phỏng đề Vật lí 50 phút với 3 dạng câu hỏi, chấm điểm tự động,
-            lưu lịch sử và thống kê kết quả ngay trên trình duyệt.
+            Chọn đề Vật lí phù hợp, làm bài theo cấu trúc mới, nhận điểm ngay
+            và theo dõi kết quả học tập trên hệ thống.
           </p>
 
           <div class="hero-pills">
@@ -47,8 +47,8 @@
           <div class="card-heading">
             <span class="card-icon">✦</span>
             <div>
-              <p>ĐỀ LUYỆN TỔNG HỢP SỐ 01</p>
-              <h2>Kiểm tra năng lực Vật lí THPT</h2>
+              <p id="selected-exam-code">CHỌN MỘT ĐỀ ĐỂ BẮT ĐẦU</p>
+              <h2 id="selected-exam-title">Kho đề luyện Vật lí THPT</h2>
             </div>
           </div>
 
@@ -63,15 +63,25 @@
           </label>
 
           <div class="exam-meta">
-            <div><strong>50</strong><span>phút</span></div>
-            <div><strong>28</strong><span>câu</span></div>
+            <div><strong id="selected-exam-duration">--</strong><span>phút</span></div>
+            <div><strong id="selected-exam-count">--</strong><span>câu</span></div>
             <div><strong>10</strong><span>điểm</span></div>
           </div>
 
-          <button class="primary-button" type="submit">Bắt đầu làm bài</button>
+          <button id="start-exam-submit" class="primary-button" type="submit" disabled>Bắt đầu làm bài</button>
           <button id="home-teacher-button" class="text-button" type="button">Dành cho giáo viên · Xem bảng điểm</button>
         </form>
       </div>
+
+      <section class="exam-library-section" aria-labelledby="exam-library-title">
+        <div class="section-heading exam-library-heading">
+          <span class="eyebrow dark">KHO ĐỀ LUYỆN</span>
+          <h2 id="exam-library-title">Chọn đề phù hợp để bắt đầu</h2>
+          <p>Giáo viên có thể thêm và xuất bản nhiều đề. Học sinh chọn một đề trước khi nhập thông tin và làm bài.</p>
+        </div>
+        <div id="exam-catalog-status" class="catalog-status">Đang tải danh sách đề...</div>
+        <div id="exam-catalog" class="exam-catalog-grid"></div>
+      </section>
 
       <section class="structure-section">
         <div class="section-heading">
@@ -108,8 +118,8 @@
     <section id="exam-screen" class="screen exam-screen">
       <div class="exam-header">
         <div>
-          <span class="eyebrow dark">ĐỀ LUYỆN TỔNG HỢP SỐ 01</span>
-          <h1>Kiểm tra năng lực Vật lí THPT</h1>
+          <span id="active-exam-code" class="eyebrow dark">ĐỀ LUYỆN VẬT LÍ</span>
+          <h1 id="active-exam-title">Kiểm tra năng lực Vật lí THPT</h1>
           <p id="candidate-line"></p>
         </div>
 
@@ -183,7 +193,7 @@
         <article class="result-card">
           <span>Thời gian làm</span>
           <strong id="time-used">0:00</strong>
-          <small>trên 50 phút</small>
+          <small id="result-duration-limit">theo thời gian của đề</small>
         </article>
       </div>
 
@@ -216,63 +226,112 @@
         </div>
       </div>
 
-      <div class="stats-grid">
-        <article class="stat-card"><span>Lượt làm bài</span><strong id="stat-attempts">0</strong><small>Tổng số kết quả</small></article>
-        <article class="stat-card"><span>Điểm trung bình</span><strong id="stat-average">0.00</strong><small>Trên thang điểm 10</small></article>
-        <article class="stat-card"><span>Điểm cao nhất</span><strong id="stat-highest">0.00</strong><small>Thành tích tốt nhất</small></article>
-        <article class="stat-card"><span>Tỉ lệ đạt ≥ 5</span><strong id="stat-pass-rate">0%</strong><small>Học sinh đạt yêu cầu</small></article>
+      <div class="teacher-tabs" role="tablist" aria-label="Khu vực giáo viên">
+        <button class="teacher-tab active" type="button" data-teacher-tab="results">Bảng điểm</button>
+        <button class="teacher-tab" type="button" data-teacher-tab="exams">Quản lý đề</button>
       </div>
 
-      <div class="dashboard-columns">
-        <section class="chart-card">
-          <div class="card-title-row">
-            <div><span class="eyebrow dark">PHÂN BỐ ĐIỂM</span><h2>Phổ điểm</h2></div>
-          </div>
-          <div id="distribution-chart" class="distribution-chart"></div>
-        </section>
+      <div id="teacher-results-panel" class="teacher-panel active" data-teacher-panel="results">
+        <div class="stats-grid">
+          <article class="stat-card"><span>Lượt làm bài</span><strong id="stat-attempts">0</strong><small>Tổng số kết quả</small></article>
+          <article class="stat-card"><span>Điểm trung bình</span><strong id="stat-average">0.00</strong><small>Trên thang điểm 10</small></article>
+          <article class="stat-card"><span>Điểm cao nhất</span><strong id="stat-highest">0.00</strong><small>Thành tích tốt nhất</small></article>
+          <article class="stat-card"><span>Tỉ lệ đạt ≥ 5</span><strong id="stat-pass-rate">0%</strong><small>Học sinh đạt yêu cầu</small></article>
+        </div>
 
-        <section class="chart-card">
-          <div class="card-title-row">
-            <div><span class="eyebrow dark">ĐIỂM THEO PHẦN</span><h2>Năng lực trung bình</h2></div>
+        <div class="dashboard-columns">
+          <section class="chart-card">
+            <div class="card-title-row"><div><span class="eyebrow dark">PHÂN BỐ ĐIỂM</span><h2>Phổ điểm</h2></div></div>
+            <div id="distribution-chart" class="distribution-chart"></div>
+          </section>
+          <section class="chart-card">
+            <div class="card-title-row"><div><span class="eyebrow dark">ĐIỂM THEO PHẦN</span><h2>Năng lực trung bình</h2></div></div>
+            <div id="part-chart" class="part-chart"></div>
+          </section>
+        </div>
+
+        <section class="table-card">
+          <div class="table-toolbar">
+            <div><span class="eyebrow dark">LỊCH SỬ LÀM BÀI</span><h2>Danh sách kết quả</h2></div>
+            <div class="filters">
+              <input id="search-result" type="search" placeholder="Tìm tên học sinh..." />
+              <select id="class-filter"><option value="">Tất cả lớp</option></select>
+              <select id="exam-filter"><option value="">Tất cả đề</option></select>
+            </div>
           </div>
-          <div id="part-chart" class="part-chart"></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr>
+                <th>Học sinh</th><th>Lớp</th><th>Đề</th><th>Phần I</th><th>Phần II</th><th>Phần III</th><th>Tổng điểm</th><th>Thời gian</th><th>Ngày làm</th>
+              </tr></thead>
+              <tbody id="results-table-body"></tbody>
+            </table>
+          </div>
+          <div id="empty-results" class="empty-state"><strong>Chưa có kết quả nào</strong><p>Học sinh nộp bài sẽ xuất hiện tại đây.</p></div>
         </section>
       </div>
 
-      <section class="table-card">
-        <div class="table-toolbar">
-          <div>
-            <span class="eyebrow dark">LỊCH SỬ LÀM BÀI</span>
-            <h2>Danh sách kết quả</h2>
-          </div>
-          <div class="filters">
-            <input id="search-result" type="search" placeholder="Tìm tên học sinh..." />
-            <select id="class-filter"><option value="">Tất cả lớp</option></select>
-          </div>
-        </div>
+      <div id="teacher-exams-panel" class="teacher-panel" data-teacher-panel="exams">
+        <div class="exam-manager-layout">
+          <aside class="exam-manager-sidebar">
+            <div class="manager-card-heading">
+              <div><span class="eyebrow dark">DANH SÁCH ĐỀ</span><h2>Đề của giáo viên</h2></div>
+              <button id="new-exam-button" class="primary-button compact" type="button">+ Tạo đề</button>
+            </div>
+            <button id="seed-default-exam-button" class="secondary-button manager-wide-button" type="button">Đưa đề mẫu số 01 lên Supabase</button>
+            <div id="teacher-exam-list" class="teacher-exam-list"></div>
+          </aside>
 
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Học sinh</th>
-                <th>Lớp</th>
-                <th>Phần I</th>
-                <th>Phần II</th>
-                <th>Phần III</th>
-                <th>Tổng điểm</th>
-                <th>Thời gian</th>
-                <th>Ngày làm</th>
-              </tr>
-            </thead>
-            <tbody id="results-table-body"></tbody>
-          </table>
+          <section class="exam-editor-card">
+            <div id="exam-editor-empty" class="empty-state manager-empty">
+              <strong>Chọn một đề hoặc tạo đề mới</strong>
+              <p>Giáo viên có thể tạo đề, thêm câu hỏi và xuất bản để học sinh nhìn thấy trong kho đề.</p>
+            </div>
+
+            <div id="exam-editor" hidden>
+              <div class="manager-card-heading editor-heading">
+                <div><span class="eyebrow dark">BIÊN SOẠN ĐỀ</span><h2 id="exam-editor-heading">Tạo đề mới</h2></div>
+                <div class="editor-actions">
+                  <button id="save-exam-draft-button" class="secondary-button" type="button">Lưu bản nháp</button>
+                  <button id="publish-exam-button" class="primary-button compact" type="button">Xuất bản</button>
+                  <button id="delete-exam-button" class="danger-button" type="button">Xóa đề</button>
+                </div>
+              </div>
+
+              <div class="exam-metadata-grid">
+                <label>Mã đề<input id="exam-code-input" maxlength="40" placeholder="Ví dụ: VL-THPT-02" /></label>
+                <label>Thời gian (phút)<input id="exam-duration-input" type="number" min="10" max="180" value="50" /></label>
+                <label class="metadata-wide">Tên đề<input id="exam-title-input" maxlength="150" placeholder="Tên đề luyện" /></label>
+                <label class="metadata-wide">Mô tả<textarea id="exam-description-input" rows="3" maxlength="500" placeholder="Mô tả ngắn cho học sinh"></textarea></label>
+              </div>
+
+              <div class="question-count-strip">
+                <div><strong id="draft-mcq-count">0/18</strong><span>Nhiều lựa chọn</span></div>
+                <div><strong id="draft-tf-count">0/4</strong><span>Đúng/Sai</span></div>
+                <div><strong id="draft-short-count">0/6</strong><span>Trả lời ngắn</span></div>
+              </div>
+
+              <section class="question-builder-card">
+                <div class="manager-card-heading">
+                  <div><span class="eyebrow dark">THÊM CÂU HỎI</span><h3>Nhập từng câu vào đề</h3></div>
+                  <select id="question-type-input" aria-label="Loại câu hỏi">
+                    <option value="mcq">Phần I · Nhiều lựa chọn</option>
+                    <option value="tf">Phần II · Đúng/Sai</option>
+                    <option value="short">Phần III · Trả lời ngắn</option>
+                  </select>
+                </div>
+                <div id="question-builder-fields"></div>
+                <button id="add-question-button" class="primary-button compact" type="button">Thêm câu vào đề</button>
+              </section>
+
+              <section class="draft-question-section">
+                <div class="manager-card-heading"><div><span class="eyebrow dark">NỘI DUNG ĐỀ</span><h3>Danh sách câu hỏi đã thêm</h3></div></div>
+                <div id="draft-question-list" class="draft-question-list"></div>
+              </section>
+            </div>
+          </section>
         </div>
-        <div id="empty-results" class="empty-state">
-          <strong>Chưa có kết quả nào</strong>
-          <p>Hãy làm một bài thi hoặc nạp dữ liệu mẫu để xem thống kê.</p>
-        </div>
-      </section>
+      </div>
     </section>
   </main>
 

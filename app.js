@@ -1,35 +1,43 @@
 (() => {
   "use strict";
 
-  const STORAGE_KEY = "anh_huan_physics_exam_results_v1";
-  const EXAM_SECONDS = EXAM_DATA.durationMinutes * 60;
+  const STORAGE_KEY = "anh_huan_physics_exam_results_v2";
   const TF_SCORE = { 0: 0, 1: 0.1, 2: 0.25, 3: 0.5, 4: 1 };
+  const REQUIRED_COUNTS = { mcq: 18, tf: 4, short: 6 };
 
   const state = {
     screen: "home",
     candidate: { name: "", className: "" },
+    examCatalog: [],
+    selectedExamId: null,
+    activeExam: null,
+    items: [],
     currentIndex: 0,
-    secondsLeft: EXAM_SECONDS,
+    secondsLeft: 0,
     timerId: null,
     startedAt: null,
     submitted: false,
     answers: createEmptyAnswers(),
     latestResult: null,
     teacherUser: null,
-    dashboardResults: []
+    dashboardResults: [],
+    teacherExams: [],
+    examDraft: null
   };
-
-  const items = [
-    ...EXAM_DATA.mcq.map((question, index) => ({ type: "mcq", part: 1, number: index + 1, question })),
-    ...EXAM_DATA.trueFalse.map((question, index) => ({ type: "tf", part: 2, number: index + 1, question })),
-    ...EXAM_DATA.shortAnswer.map((question, index) => ({ type: "short", part: 3, number: index + 1, question }))
-  ];
 
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => [...document.querySelectorAll(selector)];
 
   function createEmptyAnswers() {
     return { mcq: {}, tf: {}, short: {} };
+  }
+
+  function createEmptyExamData() {
+    return { mcq: [], trueFalse: [], shortAnswer: [] };
+  }
+
+  function deepClone(value) {
+    return JSON.parse(JSON.stringify(value));
   }
 
   async function initialize() {
@@ -39,10 +47,11 @@
     bindResultControls();
     bindDashboardControls();
     bindTeacherControls();
-    renderQuestionNavigation();
-    renderQuestion();
+    bindExamManagerControls();
     renderDashboard([]);
+    renderQuestionBuilderFields();
     await restoreTeacherSession();
+    await loadPublishedExams();
   }
 
   function bindNavigation() {
@@ -60,15 +69,30 @@
   }
 
   function bindHome() {
-    $("#start-form").addEventListener("submit", (event) => {
+    $("#start-form").addEventListener("submit", async (event) => {
       event.preventDefault();
       const name = $("#student-name").value.trim();
       const className = $("#student-class").value.trim().toUpperCase();
+      const selectedExam = state.examCatalog.find((exam) => exam.id === state.selectedExamId);
+
+      if (!selectedExam) {
+        showToast("Vui lòng chọn một đề trong kho đề luyện.");
+        return;
+      }
       if (!name || !className) {
         showToast("Vui lòng nhập đầy đủ họ tên và lớp.");
         return;
       }
-      startExam(name, className);
+
+      const startButton = $("#start-exam-submit");
+      startButton.disabled = true;
+      startButton.textContent = "Đang mở đề...";
+      try {
+        startExam(name, className, selectedExam);
+      } finally {
+        startButton.disabled = false;
+        startButton.textContent = "Bắt đầu làm bài";
+      }
     });
 
     $("#home-teacher-button")?.addEventListener("click", openTeacherAccess);
@@ -83,17 +107,30 @@
 
   function bindResultControls() {
     $("#retry-button").addEventListener("click", () => {
-      startExam(state.candidate.name, state.candidate.className);
+      if (state.activeExam) startExam(state.candidate.name, state.candidate.className, state.activeExam);
     });
     $("#view-dashboard-button").addEventListener("click", openTeacherAccess);
   }
 
   function bindDashboardControls() {
-    $("#refresh-dashboard-button")?.addEventListener("click", loadTeacherDashboard);
+    $("#refresh-dashboard-button")?.addEventListener("click", async () => {
+      const activePanel = $(".teacher-tab.active")?.dataset.teacherTab || "results";
+      if (activePanel === "exams") await loadTeacherExams();
+      else await loadTeacherDashboard(false);
+    });
     $("#export-button").addEventListener("click", exportCsv);
     $("#logout-teacher-button")?.addEventListener("click", handleTeacherLogout);
     $("#search-result").addEventListener("input", renderResultsTable);
     $("#class-filter").addEventListener("change", renderResultsTable);
+    $("#exam-filter").addEventListener("change", renderResultsTable);
+
+    $$('[data-teacher-tab]').forEach((button) => {
+      button.addEventListener("click", async () => {
+        const panel = button.dataset.teacherTab;
+        showTeacherPanel(panel);
+        if (panel === "exams") await loadTeacherExams();
+      });
+    });
   }
 
   function bindTeacherControls() {
@@ -106,24 +143,135 @@
     });
   }
 
+  function bindExamManagerControls() {
+    $("#new-exam-button")?.addEventListener("click", startNewExamDraft);
+    $("#seed-default-exam-button")?.addEventListener("click", seedDefaultExam);
+    $("#save-exam-draft-button")?.addEventListener("click", () => saveExamDraft(false));
+    $("#publish-exam-button")?.addEventListener("click", handlePublishExam);
+    $("#delete-exam-button")?.addEventListener("click", deleteCurrentExam);
+    $("#question-type-input")?.addEventListener("change", renderQuestionBuilderFields);
+    $("#add-question-button")?.addEventListener("click", addQuestionToDraft);
+  }
+
+  async function loadPublishedExams() {
+    const status = $("#exam-catalog-status");
+    status.textContent = "Đang tải danh sách đề...";
+
+    if (!window.supabaseClient) {
+      status.textContent = "Supabase chưa được kết nối.";
+      renderExamCatalog();
+      return;
+    }
+
+    try {
+      const { data, error } = await window.supabaseClient
+        .from("exams")
+        .select("id, code, title, description, duration_minutes, grade_level, is_published, exam_data, created_at")
+        .eq("is_published", true)
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+
+      state.examCatalog = (data || []).map(normalizeExamRow);
+      if (!state.examCatalog.some((exam) => exam.id === state.selectedExamId)) {
+        state.selectedExamId = state.examCatalog[0]?.id || null;
+      }
+      renderExamCatalog();
+      updateSelectedExamSummary();
+    } catch (error) {
+      console.error("Không tải được kho đề:", error);
+      status.textContent = `Không tải được kho đề: ${error.message || "Lỗi không xác định"}`;
+      renderExamCatalog();
+    }
+  }
+
+  function normalizeExamRow(row) {
+    const examData = row.exam_data && typeof row.exam_data === "object" ? row.exam_data : createEmptyExamData();
+    return {
+      id: row.id,
+      code: row.code,
+      title: row.title,
+      description: row.description || "",
+      durationMinutes: Number(row.duration_minutes || 50),
+      gradeLevel: row.grade_level || "THPT",
+      isPublished: Boolean(row.is_published),
+      createdAt: row.created_at,
+      data: {
+        mcq: Array.isArray(examData.mcq) ? examData.mcq : [],
+        trueFalse: Array.isArray(examData.trueFalse) ? examData.trueFalse : [],
+        shortAnswer: Array.isArray(examData.shortAnswer) ? examData.shortAnswer : []
+      }
+    };
+  }
+
+  function renderExamCatalog() {
+    const catalog = $("#exam-catalog");
+    const status = $("#exam-catalog-status");
+    if (!state.examCatalog.length) {
+      catalog.innerHTML = "";
+      status.textContent = "Chưa có đề nào được xuất bản. Giáo viên hãy đăng nhập và mở mục Quản lý đề.";
+      return;
+    }
+
+    status.textContent = `${state.examCatalog.length} đề đang mở cho học sinh.`;
+    catalog.innerHTML = state.examCatalog.map((exam) => {
+      const counts = getExamCounts(exam.data);
+      const selected = exam.id === state.selectedExamId;
+      return `
+        <button class="exam-catalog-card ${selected ? "selected" : ""}" type="button" data-select-exam="${exam.id}">
+          <span class="catalog-card-top"><strong>${escapeHtml(exam.code)}</strong><i>${exam.durationMinutes} phút</i></span>
+          <h3>${escapeHtml(exam.title)}</h3>
+          <p>${escapeHtml(exam.description || "Đề luyện Vật lí THPT theo cấu trúc mới.")}</p>
+          <span class="catalog-counts">
+            <i>${counts.mcq} lựa chọn</i><i>${counts.tf} Đúng/Sai</i><i>${counts.short} trả lời ngắn</i>
+          </span>
+          <span class="catalog-select-label">${selected ? "Đã chọn đề này" : "Chọn đề"}</span>
+        </button>
+      `;
+    }).join("");
+
+    $$('[data-select-exam]').forEach((button) => {
+      button.addEventListener("click", () => {
+        state.selectedExamId = button.dataset.selectExam;
+        renderExamCatalog();
+        updateSelectedExamSummary();
+      });
+    });
+  }
+
+  function updateSelectedExamSummary() {
+    const exam = state.examCatalog.find((item) => item.id === state.selectedExamId);
+    const button = $("#start-exam-submit");
+    if (!exam) {
+      $("#selected-exam-code").textContent = "CHỌN MỘT ĐỀ ĐỂ BẮT ĐẦU";
+      $("#selected-exam-title").textContent = "Kho đề luyện Vật lí THPT";
+      $("#selected-exam-duration").textContent = "--";
+      $("#selected-exam-count").textContent = "--";
+      button.disabled = true;
+      return;
+    }
+
+    const counts = getExamCounts(exam.data);
+    $("#selected-exam-code").textContent = exam.code;
+    $("#selected-exam-title").textContent = exam.title;
+    $("#selected-exam-duration").textContent = exam.durationMinutes;
+    $("#selected-exam-count").textContent = counts.total;
+    button.disabled = false;
+  }
+
   async function restoreTeacherSession() {
     if (!window.supabaseClient) return;
-
     const { data, error } = await window.supabaseClient.auth.getSession();
     if (error) {
       console.error("Không đọc được phiên đăng nhập giáo viên:", error);
       return;
     }
-
     state.teacherUser = data.session?.user ?? null;
     updateTeacherUi();
   }
 
   function updateTeacherUi() {
     const teacherButton = $("#teacher-dashboard-button");
-    if (teacherButton) {
-      teacherButton.textContent = state.teacherUser ? "Bảng điểm" : "Giáo viên";
-    }
+    if (teacherButton) teacherButton.textContent = state.teacherUser ? "Khu vực giáo viên" : "Giáo viên";
 
     const dashboardStatus = $("#dashboard-status");
     if (dashboardStatus) {
@@ -141,24 +289,20 @@
     }
 
     if (state.teacherUser) {
-      await loadTeacherDashboard();
+      showTeacherPanel("results");
+      await loadTeacherDashboard(true);
       return;
     }
-
     openTeacherLoginModal();
   }
 
   function openTeacherLoginModal() {
     const modal = $("#teacher-login-modal");
     if (!modal) return;
-
-    const errorElement = $("#teacher-login-error");
-    if (errorElement) errorElement.textContent = "";
-
+    $("#teacher-login-error").textContent = "";
     resetTeacherPasswordVisibility();
     modal.classList.add("open");
     modal.setAttribute("aria-hidden", "false");
-
     window.setTimeout(() => {
       const emailInput = $("#teacher-email");
       const passwordInput = $("#teacher-password");
@@ -170,12 +314,8 @@
   function closeTeacherLoginModal() {
     const modal = $("#teacher-login-modal");
     if (!modal) return;
-
-    const passwordInput = $("#teacher-password");
-    const errorElement = $("#teacher-login-error");
-    if (passwordInput) passwordInput.value = "";
-    if (errorElement) errorElement.textContent = "";
-
+    $("#teacher-password").value = "";
+    $("#teacher-login-error").textContent = "";
     resetTeacherPasswordVisibility();
     modal.classList.remove("open");
     modal.setAttribute("aria-hidden", "true");
@@ -185,7 +325,6 @@
     const passwordInput = $("#teacher-password");
     const toggleButton = $("#toggle-teacher-password");
     if (!passwordInput || !toggleButton) return;
-
     const willShowPassword = passwordInput.type === "password";
     passwordInput.type = willShowPassword ? "text" : "password";
     toggleButton.classList.toggle("is-visible", willShowPassword);
@@ -193,7 +332,6 @@
     toggleButton.setAttribute("aria-label", willShowPassword ? "Ẩn mật khẩu" : "Hiện mật khẩu");
     toggleButton.setAttribute("title", willShowPassword ? "Ẩn mật khẩu" : "Hiện mật khẩu");
     passwordInput.focus();
-    passwordInput.setSelectionRange(passwordInput.value.length, passwordInput.value.length);
   }
 
   function resetTeacherPasswordVisibility() {
@@ -210,7 +348,6 @@
 
   async function handleTeacherLogin(event) {
     event.preventDefault();
-
     if (!window.supabaseClient) {
       $("#teacher-login-error").textContent = "Supabase chưa được khởi tạo.";
       return;
@@ -229,11 +366,11 @@
     try {
       const { data, error } = await window.supabaseClient.auth.signInWithPassword({ email, password });
       if (error) throw error;
-
       state.teacherUser = data.user;
       updateTeacherUi();
       closeTeacherLoginModal();
-      await loadTeacherDashboard();
+      showTeacherPanel("results");
+      await loadTeacherDashboard(true);
       showToast("Đăng nhập giáo viên thành công.");
     } catch (error) {
       console.error("Lỗi đăng nhập giáo viên:", error);
@@ -247,15 +384,15 @@
 
   async function handleTeacherLogout() {
     if (!window.supabaseClient) return;
-
     const { error } = await window.supabaseClient.auth.signOut();
     if (error) {
       showToast(`Không thể đăng xuất: ${error.message}`);
       return;
     }
-
     state.teacherUser = null;
     state.dashboardResults = [];
+    state.teacherExams = [];
+    state.examDraft = null;
     updateTeacherUi();
     renderDashboard([]);
     showScreen("home");
@@ -267,31 +404,43 @@
       openTeacherLoginModal();
       return;
     }
-
     state.screen = screenName;
     $$(".screen").forEach((screen) => screen.classList.remove("active"));
-    $(`#${screenName}-screen`).classList.add("active");
+    $(`#${screenName}-screen`)?.classList.add("active");
     $$(".nav-link").forEach((link) => link.classList.toggle("active", link.dataset.screen === screenName));
     $("#teacher-dashboard-button")?.classList.toggle("active", screenName === "dashboard");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  function startExam(name, className) {
+  function startExam(name, className, exam) {
     state.candidate = { name, className };
+    state.activeExam = exam;
+    state.items = buildExamItems(exam.data);
     state.currentIndex = 0;
-    state.secondsLeft = EXAM_SECONDS;
+    state.secondsLeft = exam.durationMinutes * 60;
     state.startedAt = Date.now();
     state.submitted = false;
     state.answers = createEmptyAnswers();
     state.latestResult = null;
 
+    $("#active-exam-code").textContent = exam.code;
+    $("#active-exam-title").textContent = exam.title;
     $("#candidate-line").textContent = `${name} · Lớp ${className}`;
+    $("#result-duration-limit").textContent = `trên ${exam.durationMinutes} phút`;
     renderQuestionNavigation();
     renderQuestion();
     updateTimerDisplay();
     updateProgress();
     showScreen("exam");
     startTimer();
+  }
+
+  function buildExamItems(data) {
+    return [
+      ...(data.mcq || []).map((question, index) => ({ type: "mcq", part: 1, number: index + 1, question })),
+      ...(data.trueFalse || []).map((question, index) => ({ type: "tf", part: 2, number: index + 1, question })),
+      ...(data.shortAnswer || []).map((question, index) => ({ type: "short", part: 3, number: index + 1, question }))
+    ];
   }
 
   function startTimer() {
@@ -318,7 +467,7 @@
   }
 
   function navigateQuestion(direction) {
-    state.currentIndex = Math.min(items.length - 1, Math.max(0, state.currentIndex + direction));
+    state.currentIndex = Math.min(state.items.length - 1, Math.max(0, state.currentIndex + direction));
     renderQuestion();
     renderQuestionNavigation();
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -326,9 +475,9 @@
 
   function renderQuestionNavigation() {
     const groups = [
-      { part: 1, title: "Phần I", items: items.filter((item) => item.part === 1) },
-      { part: 2, title: "Phần II", items: items.filter((item) => item.part === 2) },
-      { part: 3, title: "Phần III", items: items.filter((item) => item.part === 3) }
+      { part: 1, title: "Phần I", items: state.items.filter((item) => item.part === 1) },
+      { part: 2, title: "Phần II", items: state.items.filter((item) => item.part === 2) },
+      { part: 3, title: "Phần III", items: state.items.filter((item) => item.part === 3) }
     ];
 
     $("#question-navigation").innerHTML = groups.map((group) => `
@@ -336,7 +485,7 @@
         <div class="nav-part-title"><span>${group.title}</span><span>${group.items.length} câu</span></div>
         <div class="nav-buttons">
           ${group.items.map((item) => {
-            const globalIndex = items.indexOf(item);
+            const globalIndex = state.items.indexOf(item);
             const classes = ["question-nav-button"];
             if (isItemAnswered(item)) classes.push("done");
             if (globalIndex === state.currentIndex) classes.push("current");
@@ -358,15 +507,18 @@
   }
 
   function renderQuestion() {
-    const item = items[state.currentIndex];
-    const totalInPart = items.filter((candidate) => candidate.part === item.part).length;
+    const item = state.items[state.currentIndex];
+    if (!item) {
+      $("#question-content").innerHTML = `<div class="empty-state"><strong>Đề chưa có câu hỏi</strong></div>`;
+      return;
+    }
+    const totalInPart = state.items.filter((candidate) => candidate.part === item.part).length;
     let html = `
       <div class="question-topline">
         <span class="question-type">${typeLabel(item.type)}</span>
-        <span class="question-index">Câu ${item.number}/${totalInPart} · ${item.question.topic}</span>
+        <span class="question-index">Câu ${item.number}/${totalInPart} · ${escapeHtml(item.question.topic || "Vật lí")}</span>
       </div>
     `;
-
     if (item.type === "mcq") html += renderMcq(item);
     if (item.type === "tf") html += renderTrueFalse(item);
     if (item.type === "short") html += renderShortAnswer(item);
@@ -374,8 +526,8 @@
     $("#question-content").innerHTML = html;
     bindQuestionInputs(item);
     $("#previous-button").disabled = state.currentIndex === 0;
-    $("#next-button").textContent = state.currentIndex === items.length - 1 ? "Kiểm tra và nộp bài" : "Câu tiếp theo →";
-    $("#next-button").onclick = state.currentIndex === items.length - 1 ? openSubmitModal : () => navigateQuestion(1);
+    $("#next-button").textContent = state.currentIndex === state.items.length - 1 ? "Kiểm tra và nộp bài" : "Câu tiếp theo →";
+    $("#next-button").onclick = state.currentIndex === state.items.length - 1 ? openSubmitModal : () => navigateQuestion(1);
   }
 
   function renderMcq(item) {
@@ -383,14 +535,12 @@
     return `
       <h2 class="question-stem">${item.question.stem}</h2>
       <div class="option-list">
-        ${item.question.options.map((option, index) => `
+        ${(item.question.options || []).map((option, index) => `
           <button class="option-button ${selected === index ? "selected" : ""}" type="button" data-mcq-option="${index}">
-            <span class="option-letter">${String.fromCharCode(65 + index)}</span>
-            <span>${option}</span>
+            <span class="option-letter">${String.fromCharCode(65 + index)}</span><span>${option}</span>
           </button>
         `).join("")}
-      </div>
-    `;
+      </div>`;
   }
 
   function renderTrueFalse(item) {
@@ -399,16 +549,14 @@
       <h2 class="question-stem">Xác định tính đúng hoặc sai của từng nhận định.</h2>
       <div class="question-context">${item.question.context}</div>
       <div class="tf-list">
-        ${item.question.statements.map((statement, index) => `
+        ${(item.question.statements || []).map((statement, index) => `
           <div class="tf-row">
             <span class="tf-label">${String.fromCharCode(97 + index)})</span>
             <span class="tf-text">${statement.text}</span>
             <button class="tf-choice true ${selected[index] === true ? "selected" : ""}" type="button" data-tf-index="${index}" data-tf-value="true">Đúng</button>
             <button class="tf-choice false ${selected[index] === false ? "selected" : ""}" type="button" data-tf-index="${index}" data-tf-value="false">Sai</button>
-          </div>
-        `).join("")}
-      </div>
-    `;
+          </div>`).join("")}
+      </div>`;
   }
 
   function renderShortAnswer(item) {
@@ -419,11 +567,10 @@
         <label for="short-answer-input">Nhập kết quả cuối cùng</label>
         <div class="short-answer-row">
           <input id="short-answer-input" inputmode="decimal" autocomplete="off" value="${escapeHtml(String(value))}" placeholder="Nhập một số" />
-          <span class="unit-badge">${item.question.unit}</span>
+          <span class="unit-badge">${escapeHtml(item.question.unit || "")}</span>
         </div>
         <p class="answer-note">Có thể dùng dấu phẩy hoặc dấu chấm cho phần thập phân. Không nhập đơn vị vào ô trả lời.</p>
-      </div>
-    `;
+      </div>`;
   }
 
   function bindQuestionInputs(item) {
@@ -436,7 +583,6 @@
         });
       });
     }
-
     if (item.type === "tf") {
       $$('[data-tf-index]').forEach((button) => {
         button.addEventListener("click", () => {
@@ -448,7 +594,6 @@
         });
       });
     }
-
     if (item.type === "short") {
       const input = $("#short-answer-input");
       input.addEventListener("input", () => {
@@ -469,16 +614,16 @@
   }
 
   function updateProgress() {
-    const answered = items.filter(isItemAnswered).length;
-    $("#progress-text").textContent = `${answered}/${items.length}`;
-    $("#progress-bar").style.width = `${(answered / items.length) * 100}%`;
+    const answered = state.items.filter(isItemAnswered).length;
+    $("#progress-text").textContent = `${answered}/${state.items.length}`;
+    $("#progress-bar").style.width = `${state.items.length ? (answered / state.items.length) * 100 : 0}%`;
   }
 
   function openSubmitModal() {
-    const unanswered = items.filter((item) => !isItemAnswered(item)).length;
+    const unanswered = state.items.filter((item) => !isItemAnswered(item)).length;
     $("#modal-message").textContent = unanswered
       ? `Bạn còn ${unanswered} câu chưa trả lời. Các câu bỏ trống sẽ không được tính điểm.`
-      : "Bạn đã trả lời đầy đủ 28 câu. Hãy kiểm tra lần cuối trước khi nộp.";
+      : `Bạn đã trả lời đầy đủ ${state.items.length} câu. Hãy kiểm tra lần cuối trước khi nộp.`;
     $("#confirm-modal").classList.add("open");
     $("#confirm-modal").setAttribute("aria-hidden", "false");
   }
@@ -489,15 +634,19 @@
   }
 
   function submitExam(autoSubmitted) {
-    if (state.submitted) return;
+    if (state.submitted || !state.activeExam) return;
     state.submitted = true;
     stopTimer();
     closeSubmitModal();
 
     const scores = calculateScores();
-    const timeUsedSeconds = EXAM_SECONDS - Math.max(0, state.secondsLeft);
+    const examSeconds = state.activeExam.durationMinutes * 60;
+    const timeUsedSeconds = examSeconds - Math.max(0, state.secondsLeft);
     const result = {
       id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      examId: state.activeExam.id,
+      examCode: state.activeExam.code,
+      examTitle: state.activeExam.title,
       name: state.candidate.name,
       className: state.candidate.className,
       submittedAt: new Date().toISOString(),
@@ -510,7 +659,7 @@
       mcqCorrect: scores.mcqCorrect,
       tfCorrectStatements: scores.tfCorrectStatements,
       shortCorrect: scores.shortCorrect,
-      answers: JSON.parse(JSON.stringify(state.answers))
+      answers: deepClone(state.answers)
     };
 
     const results = getResults();
@@ -531,13 +680,11 @@
   }
 
   async function saveResultToSupabase(result) {
-    if (!window.supabaseClient) {
-      throw new Error("Supabase chưa được khởi tạo.");
-    }
-
+    if (!window.supabaseClient) throw new Error("Supabase chưa được khởi tạo.");
     const payload = {
       client_result_id: result.id,
-      exam_code: "VL-THPT-01",
+      exam_id: result.examId,
+      exam_code: result.examCode,
       student_name: result.name,
       class_name: result.className,
       score: result.score,
@@ -551,114 +698,33 @@
       auto_submitted: result.autoSubmitted,
       answers: result.answers
     };
-
-    const { error } = await window.supabaseClient
-      .from("exam_attempts")
-      .insert(payload);
-
+    const { error } = await window.supabaseClient.from("exam_attempts").insert(payload);
     if (error && error.code !== "23505") throw error;
   }
 
-  async function getResultsFromSupabase() {
-    if (!window.supabaseClient) {
-      throw new Error("Supabase chưa được khởi tạo.");
-    }
-
-    const { data, error } = await window.supabaseClient
-      .from("exam_attempts")
-      .select(`
-        id,
-        student_name,
-        class_name,
-        score,
-        part1,
-        part2,
-        part3,
-        mcq_correct,
-        tf_correct_statements,
-        short_correct,
-        time_used_seconds,
-        auto_submitted,
-        submitted_at
-      `)
-      .order("submitted_at", { ascending: false });
-
-    if (error) throw error;
-    return data ?? [];
-  }
-
-  function mapSupabaseResult(row) {
-    return {
-      id: row.id,
-      name: row.student_name,
-      className: row.class_name,
-      score: Number(row.score),
-      part1: Number(row.part1),
-      part2: Number(row.part2),
-      part3: Number(row.part3),
-      mcqCorrect: Number(row.mcq_correct || 0),
-      tfCorrectStatements: Number(row.tf_correct_statements || 0),
-      shortCorrect: Number(row.short_correct || 0),
-      timeUsedSeconds: Number(row.time_used_seconds || 0),
-      autoSubmitted: Boolean(row.auto_submitted),
-      submittedAt: row.submitted_at
-    };
-  }
-
-  async function loadTeacherDashboard() {
-    if (!state.teacherUser) {
-      openTeacherLoginModal();
-      return;
-    }
-
-    const refreshButton = $("#refresh-dashboard-button");
-    if (refreshButton) {
-      refreshButton.disabled = true;
-      refreshButton.textContent = "Đang tải...";
-    }
-
-    try {
-      const rows = await getResultsFromSupabase();
-      state.dashboardResults = rows.map(mapSupabaseResult);
-      renderDashboard(state.dashboardResults);
-      showScreen("dashboard");
-    } catch (error) {
-      console.error("Không tải được bảng điểm:", error);
-      if (error.code === "42501" || /permission|policy|row-level/i.test(error.message || "")) {
-        showToast("Tài khoản này không có quyền xem bảng điểm.");
-      } else {
-        showToast(`Không tải được bảng điểm: ${error.message || "Lỗi không xác định"}`);
-      }
-    } finally {
-      if (refreshButton) {
-        refreshButton.disabled = false;
-        refreshButton.textContent = "Làm mới";
-      }
-    }
-  }
-
   function calculateScores() {
+    const data = state.activeExam.data;
     let mcqCorrect = 0;
-    EXAM_DATA.mcq.forEach((question) => {
-      if (state.answers.mcq[question.id] === question.answer) mcqCorrect += 1;
+    data.mcq.forEach((question) => {
+      if (state.answers.mcq[question.id] === Number(question.answer)) mcqCorrect += 1;
     });
 
     let part2 = 0;
     let tfCorrectStatements = 0;
-    EXAM_DATA.trueFalse.forEach((question) => {
+    data.trueFalse.forEach((question) => {
       const selected = state.answers.tf[question.id] || {};
       let correctInQuestion = 0;
       question.statements.forEach((statement, index) => {
-        if (selected[index] === statement.answer) correctInQuestion += 1;
+        if (selected[index] === Boolean(statement.answer)) correctInQuestion += 1;
       });
       tfCorrectStatements += correctInQuestion;
       part2 += TF_SCORE[correctInQuestion];
     });
 
     let shortCorrect = 0;
-    EXAM_DATA.shortAnswer.forEach((question) => {
+    data.shortAnswer.forEach((question) => {
       const parsed = parseNumericAnswer(state.answers.short[question.id]);
-      if (Number.isFinite(parsed) && Math.abs(parsed - question.answer) <= question.tolerance) shortCorrect += 1;
+      if (Number.isFinite(parsed) && Math.abs(parsed - Number(question.answer)) <= Number(question.tolerance || 0)) shortCorrect += 1;
     });
 
     const part1 = mcqCorrect * 0.25;
@@ -674,12 +740,12 @@
   function renderResult(result) {
     $("#result-name").textContent = `${result.name} · ${result.className}`;
     $("#result-message").textContent = result.autoSubmitted
-      ? "Hết thời gian, hệ thống đã tự động nộp bài và lưu kết quả của bạn."
+      ? `Hết thời gian, hệ thống đã tự động nộp ${result.examCode}.`
       : result.score >= 8
-        ? "Kết quả tốt. Hãy xem lại những câu sai để giữ vững mức điểm này."
+        ? `Kết quả tốt ở ${result.examCode}. Hãy xem lại những câu sai để giữ vững mức điểm này.`
         : result.score >= 5
-          ? "Bạn đã đạt mức cơ bản. Tập trung cải thiện phần có điểm thấp nhất."
-          : "Bạn cần củng cố lại kiến thức nền và luyện từng dạng trước khi làm đề tiếp theo.";
+          ? `Bạn đã đạt mức cơ bản ở ${result.examCode}. Tập trung cải thiện phần có điểm thấp nhất.`
+          : `Bạn cần củng cố lại kiến thức nền trước khi làm lại ${result.examCode}.`;
     $("#final-score").textContent = result.score.toFixed(2);
     $("#part-one-score").textContent = result.part1.toFixed(2);
     $("#part-two-score").textContent = result.part2.toFixed(2);
@@ -689,69 +755,46 @@
   }
 
   function renderReview(result) {
-    const reviewHtml = items.map((item, globalIndex) => {
+    $("#review-list").innerHTML = state.items.map((item, globalIndex) => {
       const review = getItemReview(item, result.answers);
       return `
         <article class="review-item">
           <button class="review-summary" type="button" data-review-index="${globalIndex}">
             <span class="review-status ${review.correct ? "correct" : "wrong"}">${review.correct ? "✓" : "×"}</span>
-            <strong>${item.type === "tf" ? `Phần II · Câu ${item.number}` : `Câu ${item.question.id}`}: ${truncate(item.type === "tf" ? item.question.context : item.question.stem, 120)}</strong>
+            <strong>${typeLabel(item.type)} · Câu ${item.number}: ${truncate(item.type === "tf" ? item.question.context : item.question.stem, 120)}</strong>
             <small>${review.label}</small>
           </button>
-          <div class="review-detail">
-            ${review.detail}
-            <div class="review-answer"><strong>Lời giải:</strong> ${item.question.explanation || review.explanation}</div>
-          </div>
-        </article>
-      `;
+          <div class="review-detail">${review.detail}<div class="review-answer"><strong>Lời giải:</strong> ${review.explanation}</div></div>
+        </article>`;
     }).join("");
-
-    $("#review-list").innerHTML = reviewHtml;
-    $$('[data-review-index]').forEach((button) => {
-      button.addEventListener("click", () => button.closest(".review-item").classList.toggle("open"));
-    });
+    $$('[data-review-index]').forEach((button) => button.addEventListener("click", () => button.closest(".review-item").classList.toggle("open")));
   }
 
   function getItemReview(item, answers) {
     if (item.type === "mcq") {
       const selected = answers.mcq[item.question.id];
-      const correct = selected === item.question.answer;
+      const answer = Number(item.question.answer);
+      const correct = selected === answer;
       const selectedText = Number.isInteger(selected) ? `${String.fromCharCode(65 + selected)}. ${item.question.options[selected]}` : "Chưa trả lời";
-      const correctText = `${String.fromCharCode(65 + item.question.answer)}. ${item.question.options[item.question.answer]}`;
-      return {
-        correct,
-        label: correct ? "+0,25 điểm" : "0 điểm",
-        detail: `<p><strong>Bạn chọn:</strong> ${selectedText}</p><p><strong>Đáp án đúng:</strong> ${correctText}</p>`,
-        explanation: item.question.explanation
-      };
+      const correctText = `${String.fromCharCode(65 + answer)}. ${item.question.options[answer]}`;
+      return { correct, label: correct ? "+0,25 điểm" : "0 điểm", detail: `<p><strong>Bạn chọn:</strong> ${selectedText}</p><p><strong>Đáp án đúng:</strong> ${correctText}</p>`, explanation: item.question.explanation || "" };
     }
-
     if (item.type === "tf") {
       const selected = answers.tf[item.question.id] || {};
       let correctCount = 0;
       const lines = item.question.statements.map((statement, index) => {
-        const isCorrect = selected[index] === statement.answer;
+        const isCorrect = selected[index] === Boolean(statement.answer);
         if (isCorrect) correctCount += 1;
         const selectedLabel = selected[index] === undefined ? "Chưa chọn" : selected[index] ? "Đúng" : "Sai";
         const answerLabel = statement.answer ? "Đúng" : "Sai";
-        return `<p><strong>${String.fromCharCode(97 + index)})</strong> ${statement.text}<br/>Bạn chọn: ${selectedLabel} · Đáp án: ${answerLabel}<br/><em>${statement.explanation}</em></p>`;
+        return `<p><strong>${String.fromCharCode(97 + index)})</strong> ${statement.text}<br/>Bạn chọn: ${selectedLabel} · Đáp án: ${answerLabel}<br/><em>${statement.explanation || ""}</em></p>`;
       }).join("");
-      return {
-        correct: correctCount === 4,
-        label: `${correctCount}/4 ý đúng · +${TF_SCORE[correctCount].toFixed(2)} điểm`,
-        detail: lines,
-        explanation: "Điểm của câu Đúng/Sai được tính theo tổng số ý đúng trong cùng một câu."
-      };
+      return { correct: correctCount === 4, label: `${correctCount}/4 ý đúng · +${TF_SCORE[correctCount].toFixed(2)} điểm`, detail: lines, explanation: "Điểm của câu Đúng/Sai được tính theo tổng số ý đúng trong cùng một câu." };
     }
-
     const selectedValue = parseNumericAnswer(answers.short[item.question.id]);
-    const correct = Number.isFinite(selectedValue) && Math.abs(selectedValue - item.question.answer) <= item.question.tolerance;
-    return {
-      correct,
-      label: correct ? "+0,25 điểm" : "0 điểm",
-      detail: `<p><strong>Bạn trả lời:</strong> ${Number.isFinite(selectedValue) ? `${selectedValue} ${item.question.unit}` : "Chưa trả lời"}</p><p><strong>Đáp án:</strong> ${item.question.answer} ${item.question.unit}</p>`,
-      explanation: item.question.explanation
-    };
+    const answer = Number(item.question.answer);
+    const correct = Number.isFinite(selectedValue) && Math.abs(selectedValue - answer) <= Number(item.question.tolerance || 0);
+    return { correct, label: correct ? "+0,25 điểm" : "0 điểm", detail: `<p><strong>Bạn trả lời:</strong> ${Number.isFinite(selectedValue) ? `${selectedValue} ${item.question.unit || ""}` : "Chưa trả lời"}</p><p><strong>Đáp án:</strong> ${answer} ${item.question.unit || ""}</p>`, explanation: item.question.explanation || "" };
   }
 
   function getResults() {
@@ -767,20 +810,75 @@
     localStorage.setItem(STORAGE_KEY, JSON.stringify(results));
   }
 
+  async function getResultsFromSupabase() {
+    if (!window.supabaseClient) throw new Error("Supabase chưa được khởi tạo.");
+    const { data, error } = await window.supabaseClient
+      .from("exam_attempts")
+      .select("id, exam_id, exam_code, student_name, class_name, score, part1, part2, part3, mcq_correct, tf_correct_statements, short_correct, time_used_seconds, auto_submitted, submitted_at")
+      .order("submitted_at", { ascending: false });
+    if (error) throw error;
+    return data || [];
+  }
+
+  function mapSupabaseResult(row) {
+    return {
+      id: row.id,
+      examId: row.exam_id,
+      examCode: row.exam_code || "Không rõ",
+      name: row.student_name,
+      className: row.class_name,
+      score: Number(row.score),
+      part1: Number(row.part1),
+      part2: Number(row.part2),
+      part3: Number(row.part3),
+      mcqCorrect: Number(row.mcq_correct || 0),
+      tfCorrectStatements: Number(row.tf_correct_statements || 0),
+      shortCorrect: Number(row.short_correct || 0),
+      timeUsedSeconds: Number(row.time_used_seconds || 0),
+      autoSubmitted: Boolean(row.auto_submitted),
+      submittedAt: row.submitted_at
+    };
+  }
+
+  async function loadTeacherDashboard(showDashboard = true) {
+    if (!state.teacherUser) {
+      openTeacherLoginModal();
+      return;
+    }
+    const refreshButton = $("#refresh-dashboard-button");
+    if (refreshButton) {
+      refreshButton.disabled = true;
+      refreshButton.textContent = "Đang tải...";
+    }
+    try {
+      const rows = await getResultsFromSupabase();
+      state.dashboardResults = rows.map(mapSupabaseResult);
+      renderDashboard(state.dashboardResults);
+      if (showDashboard) showScreen("dashboard");
+    } catch (error) {
+      console.error("Không tải được bảng điểm:", error);
+      showToast(error.code === "42501" ? "Tài khoản này không có quyền xem bảng điểm." : `Không tải được bảng điểm: ${error.message || "Lỗi không xác định"}`);
+    } finally {
+      if (refreshButton) {
+        refreshButton.disabled = false;
+        refreshButton.textContent = "Làm mới";
+      }
+    }
+  }
+
   function renderDashboard(results = state.dashboardResults) {
     const total = results.length;
     const average = total ? results.reduce((sum, result) => sum + result.score, 0) / total : 0;
     const highest = total ? Math.max(...results.map((result) => result.score)) : 0;
     const passRate = total ? (results.filter((result) => result.score >= 5).length / total) * 100 : 0;
-
     $("#stat-attempts").textContent = total;
     $("#stat-average").textContent = average.toFixed(2);
     $("#stat-highest").textContent = highest.toFixed(2);
     $("#stat-pass-rate").textContent = `${Math.round(passRate)}%`;
-
     renderDistribution(results);
     renderPartAverages(results);
     populateClassFilter(results);
+    populateExamFilter(results);
     renderResultsTable();
   }
 
@@ -792,13 +890,7 @@
       { label: "8 – 10", count: results.filter((r) => r.score >= 8).length }
     ];
     const max = Math.max(1, ...buckets.map((bucket) => bucket.count));
-    $("#distribution-chart").innerHTML = buckets.map((bucket) => `
-      <div class="distribution-column">
-        <div class="bar-area"><div class="bar" style="height:${(bucket.count / max) * 100}%"></div></div>
-        <strong>${bucket.count}</strong>
-        <span>${bucket.label}</span>
-      </div>
-    `).join("");
+    $("#distribution-chart").innerHTML = buckets.map((bucket) => `<div class="distribution-column"><div class="bar-area"><div class="bar" style="height:${(bucket.count / max) * 100}%"></div></div><strong>${bucket.count}</strong><span>${bucket.label}</span></div>`).join("");
   }
 
   function renderPartAverages(results) {
@@ -807,13 +899,7 @@
       { label: "Phần II", max: 4, value: averageField(results, "part2") },
       { label: "Phần III", max: 1.5, value: averageField(results, "part3") }
     ];
-    $("#part-chart").innerHTML = parts.map((part) => `
-      <div class="part-bar-row">
-        <span>${part.label}</span>
-        <div class="part-bar-track"><i style="width:${part.max ? (part.value / part.max) * 100 : 0}%"></i></div>
-        <strong>${part.value.toFixed(2)}</strong>
-      </div>
-    `).join("");
+    $("#part-chart").innerHTML = parts.map((part) => `<div class="part-bar-row"><span>${part.label}</span><div class="part-bar-track"><i style="width:${part.max ? (part.value / part.max) * 100 : 0}%"></i></div><strong>${part.value.toFixed(2)}</strong></div>`).join("");
   }
 
   function averageField(results, field) {
@@ -827,82 +913,400 @@
     if (classes.includes(current)) $("#class-filter").value = current;
   }
 
+  function populateExamFilter(results) {
+    const current = $("#exam-filter").value;
+    const exams = [...new Set(results.map((result) => result.examCode))].sort();
+    $("#exam-filter").innerHTML = `<option value="">Tất cả đề</option>${exams.map((code) => `<option value="${escapeHtml(code)}">${escapeHtml(code)}</option>`).join("")}`;
+    if (exams.includes(current)) $("#exam-filter").value = current;
+  }
+
   function renderResultsTable() {
-    const results = state.dashboardResults;
     const search = $("#search-result").value.trim().toLocaleLowerCase("vi");
     const classFilter = $("#class-filter").value;
-    const filtered = results.filter((result) => {
+    const examFilter = $("#exam-filter").value;
+    const filtered = state.dashboardResults.filter((result) => {
       const matchesSearch = result.name.toLocaleLowerCase("vi").includes(search);
       const matchesClass = !classFilter || result.className === classFilter;
-      return matchesSearch && matchesClass;
+      const matchesExam = !examFilter || result.examCode === examFilter;
+      return matchesSearch && matchesClass && matchesExam;
     });
 
     $("#results-table-body").innerHTML = filtered.map((result) => `
       <tr>
-        <td><strong>${escapeHtml(result.name)}</strong></td>
-        <td>${escapeHtml(result.className)}</td>
-        <td>${Number(result.part1).toFixed(2)}</td>
-        <td>${Number(result.part2).toFixed(2)}</td>
-        <td>${Number(result.part3).toFixed(2)}</td>
-        <td><span class="score-badge ${scoreClass(result.score)}">${Number(result.score).toFixed(2)}</span></td>
-        <td>${formatDuration(result.timeUsedSeconds)}</td>
-        <td>${formatDate(result.submittedAt)}</td>
-      </tr>
-    `).join("");
+        <td><strong>${escapeHtml(result.name)}</strong></td><td>${escapeHtml(result.className)}</td><td><span class="exam-code-badge">${escapeHtml(result.examCode)}</span></td>
+        <td>${result.part1.toFixed(2)}</td><td>${result.part2.toFixed(2)}</td><td>${result.part3.toFixed(2)}</td>
+        <td><span class="score-badge ${scoreClass(result.score)}">${result.score.toFixed(2)}</span></td><td>${formatDuration(result.timeUsedSeconds)}</td><td>${formatDate(result.submittedAt)}</td>
+      </tr>`).join("");
     $("#empty-results").style.display = filtered.length ? "none" : "block";
-    $(".table-wrap").style.display = filtered.length ? "block" : "none";
+    $("#teacher-results-panel .table-wrap").style.display = filtered.length ? "block" : "none";
   }
 
   function scoreClass(score) {
     return score >= 8 ? "good" : score >= 5 ? "average" : "low";
   }
 
-  function seedSampleData() {
-    const current = getResults();
-    if (current.some((result) => String(result.id).startsWith("sample-"))) {
-      showToast("Dữ liệu mẫu đã có sẵn trong bảng điểm.");
-      renderDashboard();
+  function showTeacherPanel(panelName) {
+    $$('[data-teacher-tab]').forEach((button) => button.classList.toggle("active", button.dataset.teacherTab === panelName));
+    $$('[data-teacher-panel]').forEach((panel) => panel.classList.toggle("active", panel.dataset.teacherPanel === panelName));
+  }
+
+  async function loadTeacherExams() {
+    if (!state.teacherUser || !window.supabaseClient) return;
+    $("#teacher-exam-list").innerHTML = `<div class="manager-loading">Đang tải danh sách đề...</div>`;
+    try {
+      const { data, error } = await window.supabaseClient
+        .from("exams")
+        .select("id, code, title, description, duration_minutes, grade_level, is_published, exam_data, created_at, updated_at")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      state.teacherExams = (data || []).map(normalizeExamRow);
+      renderTeacherExamList();
+      if (state.examDraft?.id) {
+        const updated = state.teacherExams.find((exam) => exam.id === state.examDraft.id);
+        if (updated) setExamDraftFromExam(updated);
+      }
+    } catch (error) {
+      console.error("Không tải được danh sách đề:", error);
+      $("#teacher-exam-list").innerHTML = `<div class="empty-state"><strong>Không tải được danh sách đề</strong><p>${escapeHtml(error.message || "")}</p></div>`;
+    }
+  }
+
+  function renderTeacherExamList() {
+    const list = $("#teacher-exam-list");
+    if (!state.teacherExams.length) {
+      list.innerHTML = `<div class="empty-state"><strong>Chưa có đề nào</strong><p>Nhấn “Tạo đề” hoặc đưa đề mẫu lên Supabase.</p></div>`;
+      return;
+    }
+    list.innerHTML = state.teacherExams.map((exam) => {
+      const counts = getExamCounts(exam.data);
+      return `
+        <button class="teacher-exam-card ${state.examDraft?.id === exam.id ? "active" : ""}" type="button" data-edit-exam="${exam.id}">
+          <span class="teacher-exam-card-top"><strong>${escapeHtml(exam.code)}</strong><i class="publish-badge ${exam.isPublished ? "published" : "draft"}">${exam.isPublished ? "Đã xuất bản" : "Bản nháp"}</i></span>
+          <h3>${escapeHtml(exam.title)}</h3>
+          <p>${counts.mcq}/18 · ${counts.tf}/4 · ${counts.short}/6 câu</p>
+        </button>`;
+    }).join("");
+    $$('[data-edit-exam]').forEach((button) => button.addEventListener("click", () => {
+      const exam = state.teacherExams.find((item) => item.id === button.dataset.editExam);
+      if (exam) setExamDraftFromExam(exam);
+    }));
+  }
+
+  function startNewExamDraft() {
+    state.examDraft = {
+      id: null,
+      code: `VL-THPT-${String(state.teacherExams.length + 1).padStart(2, "0")}`,
+      title: "Đề luyện Vật lí THPT mới",
+      description: "",
+      durationMinutes: 50,
+      isPublished: false,
+      data: createEmptyExamData()
+    };
+    renderExamEditor();
+    renderTeacherExamList();
+  }
+
+  function setExamDraftFromExam(exam) {
+    state.examDraft = deepClone(exam);
+    renderExamEditor();
+    renderTeacherExamList();
+  }
+
+  function renderExamEditor() {
+    const draft = state.examDraft;
+    $("#exam-editor-empty").hidden = Boolean(draft);
+    $("#exam-editor").hidden = !draft;
+    if (!draft) return;
+
+    $("#exam-editor-heading").textContent = draft.id ? `Chỉnh sửa ${draft.code}` : "Tạo đề mới";
+    $("#exam-code-input").value = draft.code || "";
+    $("#exam-duration-input").value = draft.durationMinutes || 50;
+    $("#exam-title-input").value = draft.title || "";
+    $("#exam-description-input").value = draft.description || "";
+    $("#publish-exam-button").textContent = draft.isPublished ? "Gỡ xuất bản" : "Xuất bản";
+    $("#delete-exam-button").disabled = !draft.id;
+    updateDraftCounts();
+    renderDraftQuestionList();
+    renderQuestionBuilderFields();
+  }
+
+  function readMetadataIntoDraft() {
+    if (!state.examDraft) return false;
+    const code = $("#exam-code-input").value.trim().toUpperCase().replace(/\s+/g, "-");
+    const title = $("#exam-title-input").value.trim();
+    const description = $("#exam-description-input").value.trim();
+    const durationMinutes = Number($("#exam-duration-input").value);
+    if (!code || !title || !Number.isFinite(durationMinutes) || durationMinutes < 10 || durationMinutes > 180) {
+      showToast("Vui lòng nhập mã đề, tên đề và thời gian từ 10 đến 180 phút.");
+      return false;
+    }
+    Object.assign(state.examDraft, { code, title, description, durationMinutes });
+    return true;
+  }
+
+  function getExamCounts(data) {
+    const mcq = Array.isArray(data?.mcq) ? data.mcq.length : 0;
+    const tf = Array.isArray(data?.trueFalse) ? data.trueFalse.length : 0;
+    const short = Array.isArray(data?.shortAnswer) ? data.shortAnswer.length : 0;
+    return { mcq, tf, short, total: mcq + tf + short };
+  }
+
+  function hasRequiredStructure(data) {
+    const counts = getExamCounts(data);
+    return counts.mcq === REQUIRED_COUNTS.mcq && counts.tf === REQUIRED_COUNTS.tf && counts.short === REQUIRED_COUNTS.short;
+  }
+
+  function updateDraftCounts() {
+    if (!state.examDraft) return;
+    const counts = getExamCounts(state.examDraft.data);
+    $("#draft-mcq-count").textContent = `${counts.mcq}/18`;
+    $("#draft-tf-count").textContent = `${counts.tf}/4`;
+    $("#draft-short-count").textContent = `${counts.short}/6`;
+    $("#draft-mcq-count").classList.toggle("complete", counts.mcq === 18);
+    $("#draft-tf-count").classList.toggle("complete", counts.tf === 4);
+    $("#draft-short-count").classList.toggle("complete", counts.short === 6);
+  }
+
+  function renderQuestionBuilderFields() {
+    const container = $("#question-builder-fields");
+    if (!container) return;
+    const type = $("#question-type-input")?.value || "mcq";
+    if (type === "mcq") {
+      container.innerHTML = `
+        <div class="builder-grid">
+          <label>Chủ đề<input id="qb-topic" placeholder="Ví dụ: Dao động" /></label>
+          <label class="builder-wide">Nội dung câu hỏi<textarea id="qb-stem" rows="3"></textarea></label>
+          ${["A", "B", "C", "D"].map((letter, index) => `<label>Phương án ${letter}<input id="qb-option-${index}" /></label>`).join("")}
+          <label>Đáp án đúng<select id="qb-mcq-answer"><option value="0">A</option><option value="1">B</option><option value="2">C</option><option value="3">D</option></select></label>
+          <label class="builder-wide">Lời giải<textarea id="qb-explanation" rows="3"></textarea></label>
+        </div>`;
+      return;
+    }
+    if (type === "tf") {
+      container.innerHTML = `
+        <div class="builder-grid">
+          <label>Chủ đề<input id="qb-topic" placeholder="Ví dụ: Khí lí tưởng" /></label>
+          <label class="builder-wide">Dữ kiện chung<textarea id="qb-context" rows="3"></textarea></label>
+        </div>
+        <div class="tf-builder-list">
+          ${[0, 1, 2, 3].map((index) => `
+            <div class="tf-builder-row">
+              <strong>${String.fromCharCode(97 + index)})</strong>
+              <input id="qb-statement-${index}" placeholder="Nhận định ${index + 1}" />
+              <select id="qb-tf-answer-${index}"><option value="true">Đúng</option><option value="false">Sai</option></select>
+              <input id="qb-tf-explanation-${index}" placeholder="Giải thích ngắn" />
+            </div>`).join("")}
+        </div>`;
+      return;
+    }
+    container.innerHTML = `
+      <div class="builder-grid">
+        <label>Chủ đề<input id="qb-topic" placeholder="Ví dụ: Điện năng" /></label>
+        <label class="builder-wide">Nội dung câu hỏi<textarea id="qb-stem" rows="3"></textarea></label>
+        <label>Đáp án số<input id="qb-short-answer" inputmode="decimal" placeholder="Ví dụ: 14.4" /></label>
+        <label>Sai số cho phép<input id="qb-tolerance" inputmode="decimal" value="0.01" /></label>
+        <label>Đơn vị<input id="qb-unit" placeholder="Ví dụ: kJ" /></label>
+        <label class="builder-wide">Lời giải<textarea id="qb-explanation" rows="3"></textarea></label>
+      </div>`;
+  }
+
+  function addQuestionToDraft() {
+    if (!state.examDraft) {
+      showToast("Hãy tạo hoặc chọn một đề trước.");
+      return;
+    }
+    const type = $("#question-type-input").value;
+    const topic = $("#qb-topic")?.value.trim() || "Vật lí";
+    const id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+    const counts = getExamCounts(state.examDraft.data);
+
+    if (type === "mcq") {
+      if (counts.mcq >= 18) return showToast("Phần I đã đủ 18 câu.");
+      const stem = $("#qb-stem").value.trim();
+      const options = [0, 1, 2, 3].map((index) => $(`#qb-option-${index}`).value.trim());
+      if (!stem || options.some((option) => !option)) return showToast("Hãy nhập nội dung và đủ bốn phương án.");
+      state.examDraft.data.mcq.push({ id, topic, stem, options, answer: Number($("#qb-mcq-answer").value), explanation: $("#qb-explanation").value.trim() });
+    } else if (type === "tf") {
+      if (counts.tf >= 4) return showToast("Phần II đã đủ 4 câu.");
+      const context = $("#qb-context").value.trim();
+      const statements = [0, 1, 2, 3].map((index) => ({
+        text: $(`#qb-statement-${index}`).value.trim(),
+        answer: $(`#qb-tf-answer-${index}`).value === "true",
+        explanation: $(`#qb-tf-explanation-${index}`).value.trim()
+      }));
+      if (!context || statements.some((statement) => !statement.text)) return showToast("Hãy nhập dữ kiện và đủ bốn nhận định.");
+      state.examDraft.data.trueFalse.push({ id, topic, context, statements });
+    } else {
+      if (counts.short >= 6) return showToast("Phần III đã đủ 6 câu.");
+      const stem = $("#qb-stem").value.trim();
+      const answer = parseNumericAnswer($("#qb-short-answer").value);
+      const tolerance = parseNumericAnswer($("#qb-tolerance").value);
+      if (!stem || !Number.isFinite(answer) || !Number.isFinite(tolerance) || tolerance < 0) return showToast("Hãy nhập câu hỏi, đáp án số và sai số hợp lệ.");
+      state.examDraft.data.shortAnswer.push({ id, topic, stem, answer, tolerance, unit: $("#qb-unit").value.trim(), explanation: $("#qb-explanation").value.trim() });
+    }
+
+    updateDraftCounts();
+    renderDraftQuestionList();
+    renderQuestionBuilderFields();
+    showToast("Đã thêm câu hỏi vào bản nháp.");
+  }
+
+  function renderDraftQuestionList() {
+    const container = $("#draft-question-list");
+    if (!state.examDraft) {
+      container.innerHTML = "";
+      return;
+    }
+    const items = buildExamItems(state.examDraft.data);
+    if (!items.length) {
+      container.innerHTML = `<div class="empty-state"><strong>Đề chưa có câu hỏi</strong><p>Chọn loại câu hỏi và thêm từng câu ở phía trên.</p></div>`;
+      return;
+    }
+    container.innerHTML = items.map((item) => `
+      <article class="draft-question-item">
+        <div><span>${typeLabel(item.type)} · Câu ${item.number}</span><strong>${escapeHtml(truncate(item.type === "tf" ? item.question.context : item.question.stem, 150))}</strong></div>
+        <button class="danger-button compact-question-delete" type="button" data-delete-question-type="${item.type}" data-delete-question-id="${item.question.id}">Xóa</button>
+      </article>`).join("");
+    $$('[data-delete-question-id]').forEach((button) => button.addEventListener("click", () => {
+      deleteDraftQuestion(button.dataset.deleteQuestionType, button.dataset.deleteQuestionId);
+    }));
+  }
+
+  function deleteDraftQuestion(type, questionId) {
+    if (!state.examDraft) return;
+    const key = type === "mcq" ? "mcq" : type === "tf" ? "trueFalse" : "shortAnswer";
+    state.examDraft.data[key] = state.examDraft.data[key].filter((question) => String(question.id) !== String(questionId));
+    updateDraftCounts();
+    renderDraftQuestionList();
+  }
+
+  async function saveExamDraft(publish) {
+    if (!state.examDraft || !readMetadataIntoDraft()) return null;
+    if (publish && !hasRequiredStructure(state.examDraft.data)) {
+      showToast("Muốn xuất bản, đề phải đủ 18 câu lựa chọn, 4 câu Đúng/Sai và 6 câu trả lời ngắn.");
+      return null;
+    }
+    if (!window.supabaseClient) return null;
+
+    const payload = {
+      code: state.examDraft.code,
+      title: state.examDraft.title,
+      description: state.examDraft.description,
+      duration_minutes: state.examDraft.durationMinutes,
+      grade_level: "THPT",
+      is_published: Boolean(publish),
+      exam_data: state.examDraft.data,
+      updated_at: new Date().toISOString()
+    };
+
+    const button = publish ? $("#publish-exam-button") : $("#save-exam-draft-button");
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = "Đang lưu...";
+
+    try {
+      let query;
+      if (state.examDraft.id) query = window.supabaseClient.from("exams").update(payload).eq("id", state.examDraft.id).select().single();
+      else query = window.supabaseClient.from("exams").insert({ ...payload, created_by: state.teacherUser.id }).select().single();
+      const { data, error } = await query;
+      if (error) throw error;
+      state.examDraft = normalizeExamRow(data);
+      await loadTeacherExams();
+      await loadPublishedExams();
+      showToast(publish ? "Đề đã được xuất bản cho học sinh." : "Đã lưu bản nháp. Nếu đề đang xuất bản, thao tác này sẽ chuyển về bản nháp.");
+      return data;
+    } catch (error) {
+      console.error("Không lưu được đề:", error);
+      showToast(error.code === "23505" ? "Mã đề đã tồn tại. Hãy dùng mã khác." : `Không lưu được đề: ${error.message || "Lỗi không xác định"}`);
+      return null;
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  }
+
+  async function handlePublishExam() {
+    if (!state.examDraft) return;
+    if (state.examDraft.isPublished && state.examDraft.id) {
+      const { error } = await window.supabaseClient.from("exams").update({ is_published: false, updated_at: new Date().toISOString() }).eq("id", state.examDraft.id);
+      if (error) {
+        showToast(`Không thể gỡ xuất bản: ${error.message}`);
+        return;
+      }
+      state.examDraft.isPublished = false;
+      await loadTeacherExams();
+      await loadPublishedExams();
+      showToast("Đã gỡ đề khỏi kho đề học sinh.");
+      return;
+    }
+    await saveExamDraft(true);
+  }
+
+  async function deleteCurrentExam() {
+    if (!state.examDraft?.id) return;
+    if (!window.confirm(`Xóa vĩnh viễn đề ${state.examDraft.code}? Các điểm đã lưu vẫn được giữ lại.`)) return;
+    const { error } = await window.supabaseClient.from("exams").delete().eq("id", state.examDraft.id);
+    if (error) {
+      showToast(`Không thể xóa đề: ${error.message}`);
+      return;
+    }
+    state.examDraft = null;
+    renderExamEditor();
+    await loadTeacherExams();
+    await loadPublishedExams();
+    showToast("Đã xóa đề.");
+  }
+
+  async function seedDefaultExam() {
+    if (!window.EXAM_DATA && typeof EXAM_DATA === "undefined") {
+      showToast("Không tìm thấy dữ liệu đề mẫu trong data.js.");
+      return;
+    }
+    const sample = typeof EXAM_DATA !== "undefined" ? EXAM_DATA : window.EXAM_DATA;
+    const existing = state.teacherExams.find((exam) => exam.code === "VL-THPT-01");
+    if (existing) {
+      setExamDraftFromExam(existing);
+      showToast("Đề mẫu số 01 đã có trong Supabase.");
       return;
     }
 
-    const names = [
-      ["Nguyễn Minh Anh", "12A1", 8.75, 4.0, 3.5, 1.25, 2120],
-      ["Trần Gia Huy", "12A1", 7.25, 3.5, 2.75, 1.0, 2460],
-      ["Lê Phương Thảo", "12A2", 9.25, 4.25, 3.75, 1.25, 1980],
-      ["Phạm Đức Long", "12A2", 5.75, 3.0, 2.0, 0.75, 2860],
-      ["Võ Khánh Linh", "12A3", 6.5, 3.25, 2.5, 0.75, 2685],
-      ["Hoàng Nhật Nam", "12A3", 4.5, 2.5, 1.5, 0.5, 2990],
-      ["Đỗ Thu Hà", "12A1", 8.0, 3.75, 3.25, 1.0, 2240],
-      ["Bùi Quang Vinh", "12A2", 6.0, 3.0, 2.25, 0.75, 2735]
-    ];
+    const payload = {
+      code: "VL-THPT-01",
+      title: sample.title || "Đề luyện tổng hợp Vật lí THPT số 01",
+      description: "Đề luyện tổng hợp theo cấu trúc mới gồm 18 câu nhiều lựa chọn, 4 câu Đúng/Sai và 6 câu trả lời ngắn.",
+      duration_minutes: Number(sample.durationMinutes || 50),
+      grade_level: "THPT",
+      is_published: true,
+      exam_data: sample,
+      created_by: state.teacherUser.id,
+      updated_at: new Date().toISOString()
+    };
 
-    const samples = names.map((entry, index) => ({
-      id: `sample-${index + 1}`,
-      name: entry[0],
-      className: entry[1],
-      score: entry[2],
-      part1: entry[3],
-      part2: entry[4],
-      part3: entry[5],
-      timeUsedSeconds: entry[6],
-      submittedAt: new Date(Date.now() - index * 86400000).toISOString(),
-      autoSubmitted: false,
-      answers: createEmptyAnswers()
-    }));
-    saveResults([...current, ...samples]);
-    renderDashboard();
-    showToast("Đã nạp 8 kết quả mẫu.");
+    const button = $("#seed-default-exam-button");
+    button.disabled = true;
+    button.textContent = "Đang đưa đề mẫu lên...";
+    try {
+      const { data, error } = await window.supabaseClient.from("exams").insert(payload).select().single();
+      if (error) throw error;
+      state.examDraft = normalizeExamRow(data);
+      await loadTeacherExams();
+      await loadPublishedExams();
+      showToast("Đã đưa đề mẫu số 01 lên Supabase và xuất bản.");
+    } catch (error) {
+      console.error("Không tạo được đề mẫu:", error);
+      showToast(`Không tạo được đề mẫu: ${error.message || "Lỗi không xác định"}`);
+    } finally {
+      button.disabled = false;
+      button.textContent = "Đưa đề mẫu số 01 lên Supabase";
+    }
   }
 
   function exportCsv() {
     const results = state.dashboardResults;
-    if (!results.length) {
-      showToast("Chưa có dữ liệu để xuất.");
-      return;
-    }
+    if (!results.length) return showToast("Chưa có dữ liệu để xuất.");
     const rows = [
-      ["Họ và tên", "Lớp", "Phần I", "Phần II", "Phần III", "Tổng điểm", "Thời gian (giây)", "Ngày làm"],
-      ...results.map((result) => [result.name, result.className, result.part1, result.part2, result.part3, result.score, result.timeUsedSeconds, formatDate(result.submittedAt)])
+      ["Họ và tên", "Lớp", "Mã đề", "Phần I", "Phần II", "Phần III", "Tổng điểm", "Thời gian (giây)", "Ngày làm"],
+      ...results.map((result) => [result.name, result.className, result.examCode, result.part1, result.part2, result.part3, result.score, result.timeUsedSeconds, formatDate(result.submittedAt)])
     ];
     const csv = "\uFEFF" + rows.map((row) => row.map(csvEscape).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
@@ -915,18 +1319,7 @@
   }
 
   function csvEscape(value) {
-    const text = String(value ?? "").replace(/"/g, '""');
-    return `"${text}"`;
-  }
-
-  function clearResults() {
-    if (!getResults().length) return;
-    if (!window.confirm("Xóa toàn bộ lịch sử điểm trên trình duyệt này? Hành động này không thể hoàn tác.")) return;
-    localStorage.removeItem(STORAGE_KEY);
-    $("#search-result").value = "";
-    $("#class-filter").value = "";
-    renderDashboard();
-    showToast("Đã xóa toàn bộ dữ liệu điểm.");
+    return `"${String(value ?? "").replace(/"/g, '""')}"`;
   }
 
   function formatDuration(totalSeconds) {
@@ -945,11 +1338,12 @@
   }
 
   function truncate(text, maxLength) {
-    return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
+    const value = String(text || "");
+    return value.length > maxLength ? `${value.slice(0, maxLength)}…` : value;
   }
 
   function escapeHtml(value) {
-    return value.replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" }[character]));
+    return String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" }[character]));
   }
 
   let toastTimeout;
@@ -958,7 +1352,7 @@
     toast.textContent = message;
     toast.classList.add("show");
     window.clearTimeout(toastTimeout);
-    toastTimeout = window.setTimeout(() => toast.classList.remove("show"), 2600);
+    toastTimeout = window.setTimeout(() => toast.classList.remove("show"), 3200);
   }
 
   document.addEventListener("DOMContentLoaded", initialize);
