@@ -340,14 +340,28 @@
       shortCorrect: scores.shortCorrect,
       answers: JSON.parse(JSON.stringify(state.answers))
     };
+const results = getResults();
+results.unshift(result);
 
-    const results = getResults();
-    results.unshift(result);
-    saveResults(results);
-    state.latestResult = result;
-    renderResult(result);
-    showScreen("result");
-    if (autoSubmitted) showToast("Hết giờ. Hệ thống đã tự động nộp bài.");
+// Vẫn lưu một bản trên trình duyệt để dự phòng mất mạng.
+saveResults(results);
+
+state.latestResult = result;
+renderResult(result);
+showScreen("result");
+
+// Gửi một bản lên Supabase.
+void saveResultToSupabase(result)
+  .then(() => {
+    showToast("Kết quả đã được lưu lên hệ thống.");
+  })
+  .catch((error) => {
+    console.error("Lỗi lưu Supabase:", error);
+
+    showToast(
+      "Chưa lưu được lên máy chủ. Kết quả vẫn còn trên thiết bị này."
+    );
+  });    if (autoSubmitted) showToast("Hết giờ. Hệ thống đã tự động nộp bài.");
   }
 
   function calculateScores() {
@@ -642,6 +656,47 @@
     renderDashboard();
     showToast("Đã xóa toàn bộ dữ liệu điểm.");
   }
+
+  async function saveResultToSupabase(result) {
+  if (!window.supabaseClient) {
+    throw new Error("Supabase chưa được khởi tạo.");
+  }
+
+  const payload = {
+    client_result_id: result.id,
+    exam_code: "VL-THPT-01",
+
+    student_name: result.name,
+    class_name: result.className,
+
+    score: result.score,
+    part1: result.part1,
+    part2: result.part2,
+    part3: result.part3,
+
+    mcq_correct: result.mcqCorrect,
+    tf_correct_statements: result.tfCorrectStatements,
+    short_correct: result.shortCorrect,
+
+    time_used_seconds: result.timeUsedSeconds,
+    auto_submitted: result.autoSubmitted,
+
+    answers: result.answers
+  };
+
+  const { error } = await window.supabaseClient
+    .from("exam_attempts")
+    .insert(payload);
+
+  if (error) {
+    // Mã 23505 nghĩa là kết quả này đã được lưu trước đó.
+    if (error.code === "23505") {
+      return;
+    }
+
+    throw error;
+  }
+}
 
   function formatDuration(totalSeconds) {
     const minutes = Math.floor(Number(totalSeconds || 0) / 60);
