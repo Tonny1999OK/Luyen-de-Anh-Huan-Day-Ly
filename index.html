@@ -293,5 +293,46 @@
 <script src="supabase-config.js"></script>
 <script src="data.js"></script>
 <script src="app.js"></script>
+
+<div id="teacher-login-modal" class="modal" aria-hidden="true">
+  <div class="modal-backdrop"></div>
+
+  <div class="modal-card">
+    <h2>Đăng nhập giáo viên</h2>
+
+    <form id="teacher-login-form">
+      <label for="teacher-email">Email</label>
+
+      <input
+        id="teacher-email"
+        type="email"
+        autocomplete="email"
+        required
+      />
+
+      <label for="teacher-password">Mật khẩu</label>
+
+      <input
+        id="teacher-password"
+        type="password"
+        autocomplete="current-password"
+        required
+      />
+
+      <p id="teacher-login-error"></p>
+
+      <button type="submit">
+        Đăng nhập
+      </button>
+
+      <button
+        id="close-teacher-login"
+        type="button"
+      >
+        Đóng
+      </button>
+    </form>
+  </div>
+</div>
 </body>
 </html>

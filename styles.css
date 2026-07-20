@@ -298,3 +298,45 @@ td { color: var(--slate-700); font-size: 13px; }
   .review-summary { grid-template-columns: 34px 1fr; }
   .review-summary small { grid-column: 2; }
 }
+
+/* Teacher authentication */
+.teacher-modal-card {
+  text-align: left;
+}
+
+.teacher-modal-card h2,
+.teacher-login-help {
+  text-align: center;
+}
+
+.teacher-modal-icon {
+  color: var(--navy-900);
+  background: var(--blue-100);
+}
+
+.teacher-login-help {
+  margin: 8px 0 22px;
+}
+
+.form-error {
+  min-height: 20px;
+  margin: 12px 0 0;
+  color: var(--red) !important;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: left;
+}
+
+#teacher-login-form .modal-actions {
+  margin-top: 18px;
+}
+
+#teacher-login-form .primary-button,
+#teacher-login-form .secondary-button {
+  min-width: 130px;
+}
+
+#teacher-dashboard-button.active {
+  color: var(--navy-900);
+  background: var(--blue-100);
+}

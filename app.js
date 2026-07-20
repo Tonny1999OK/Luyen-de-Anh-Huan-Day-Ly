@@ -14,7 +14,9 @@
     startedAt: null,
     submitted: false,
     answers: createEmptyAnswers(),
-    latestResult: null
+    latestResult: null,
+    teacherUser: null,
+    dashboardResults: []
   };
 
   const items = [
@@ -30,15 +32,17 @@
     return { mcq: {}, tf: {}, short: {} };
   }
 
-  function initialize() {
+  async function initialize() {
     bindNavigation();
     bindHome();
     bindExamControls();
     bindResultControls();
     bindDashboardControls();
+    bindTeacherControls();
     renderQuestionNavigation();
     renderQuestion();
-    renderDashboard();
+    renderDashboard([]);
+    await restoreTeacherSession();
   }
 
   function bindNavigation() {
@@ -67,10 +71,7 @@
       startExam(name, className);
     });
 
-    $("#load-sample-button").addEventListener("click", () => {
-      seedSampleData();
-      showScreen("dashboard");
-    });
+    $("#home-teacher-button")?.addEventListener("click", openTeacherAccess);
   }
 
   function bindExamControls() {
@@ -84,23 +85,147 @@
     $("#retry-button").addEventListener("click", () => {
       startExam(state.candidate.name, state.candidate.className);
     });
-    $("#view-dashboard-button").addEventListener("click", () => showScreen("dashboard"));
+    $("#view-dashboard-button").addEventListener("click", openTeacherAccess);
   }
 
   function bindDashboardControls() {
-    $("#seed-dashboard-button").addEventListener("click", seedSampleData);
+    $("#refresh-dashboard-button")?.addEventListener("click", loadTeacherDashboard);
     $("#export-button").addEventListener("click", exportCsv);
-    $("#clear-results-button").addEventListener("click", clearResults);
+    $("#logout-teacher-button")?.addEventListener("click", handleTeacherLogout);
     $("#search-result").addEventListener("input", renderResultsTable);
     $("#class-filter").addEventListener("change", renderResultsTable);
   }
 
+  function bindTeacherControls() {
+    $("#teacher-dashboard-button")?.addEventListener("click", openTeacherAccess);
+    $("#teacher-login-form")?.addEventListener("submit", handleTeacherLogin);
+    $("#close-teacher-login")?.addEventListener("click", closeTeacherLoginModal);
+    $$('[data-close-teacher-login]').forEach((element) => {
+      element.addEventListener("click", closeTeacherLoginModal);
+    });
+  }
+
+  async function restoreTeacherSession() {
+    if (!window.supabaseClient) return;
+
+    const { data, error } = await window.supabaseClient.auth.getSession();
+    if (error) {
+      console.error("Không đọc được phiên đăng nhập giáo viên:", error);
+      return;
+    }
+
+    state.teacherUser = data.session?.user ?? null;
+    updateTeacherUi();
+  }
+
+  function updateTeacherUi() {
+    const teacherButton = $("#teacher-dashboard-button");
+    if (teacherButton) {
+      teacherButton.textContent = state.teacherUser ? "Bảng điểm" : "Giáo viên";
+    }
+
+    const dashboardStatus = $("#dashboard-status");
+    if (dashboardStatus) {
+      dashboardStatus.textContent = state.teacherUser
+        ? `Đang đăng nhập: ${state.teacherUser.email}. Dữ liệu được đồng bộ từ Supabase.`
+        : "Dữ liệu được đồng bộ từ Supabase và chỉ tài khoản giáo viên được xem.";
+    }
+  }
+
+  async function openTeacherAccess() {
+    if (state.screen === "exam" && !state.submitted) {
+      const shouldLeave = window.confirm("Bài làm đang diễn ra. Bạn có chắc muốn rời khỏi đề thi để mở trang giáo viên?");
+      if (!shouldLeave) return;
+      stopTimer();
+    }
+
+    if (state.teacherUser) {
+      await loadTeacherDashboard();
+      return;
+    }
+
+    openTeacherLoginModal();
+  }
+
+  function openTeacherLoginModal() {
+    const modal = $("#teacher-login-modal");
+    if (!modal) return;
+    $("#teacher-login-error").textContent = "";
+    modal.classList.add("open");
+    modal.setAttribute("aria-hidden", "false");
+    window.setTimeout(() => $("#teacher-email")?.focus(), 50);
+  }
+
+  function closeTeacherLoginModal() {
+    const modal = $("#teacher-login-modal");
+    if (!modal) return;
+    modal.classList.remove("open");
+    modal.setAttribute("aria-hidden", "true");
+  }
+
+  async function handleTeacherLogin(event) {
+    event.preventDefault();
+
+    if (!window.supabaseClient) {
+      $("#teacher-login-error").textContent = "Supabase chưa được khởi tạo.";
+      return;
+    }
+
+    const email = $("#teacher-email").value.trim();
+    const password = $("#teacher-password").value;
+    const submitButton = $("#teacher-login-submit");
+    const errorElement = $("#teacher-login-error");
+
+    errorElement.textContent = "";
+    submitButton.disabled = true;
+    submitButton.textContent = "Đang đăng nhập...";
+
+    try {
+      const { data, error } = await window.supabaseClient.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+
+      state.teacherUser = data.user;
+      updateTeacherUi();
+      closeTeacherLoginModal();
+      await loadTeacherDashboard();
+      showToast("Đăng nhập giáo viên thành công.");
+    } catch (error) {
+      console.error("Lỗi đăng nhập giáo viên:", error);
+      errorElement.textContent = "Email, mật khẩu hoặc quyền giáo viên không hợp lệ.";
+    } finally {
+      submitButton.disabled = false;
+      submitButton.textContent = "Đăng nhập";
+    }
+  }
+
+  async function handleTeacherLogout() {
+    if (!window.supabaseClient) return;
+
+    const { error } = await window.supabaseClient.auth.signOut();
+    if (error) {
+      showToast(`Không thể đăng xuất: ${error.message}`);
+      return;
+    }
+
+    state.teacherUser = null;
+    state.dashboardResults = [];
+    updateTeacherUi();
+    renderDashboard([]);
+    showScreen("home");
+    showToast("Đã đăng xuất tài khoản giáo viên.");
+  }
+
   function showScreen(screenName) {
+    if (screenName === "dashboard" && !state.teacherUser) {
+      openTeacherLoginModal();
+      return;
+    }
+
     state.screen = screenName;
     $$(".screen").forEach((screen) => screen.classList.remove("active"));
     $(`#${screenName}-screen`).classList.add("active");
     $$(".nav-link").forEach((link) => link.classList.toggle("active", link.dataset.screen === screenName));
-    if (screenName === "dashboard") renderDashboard();
+    $("#teacher-dashboard-button")?.classList.toggle("active", screenName === "dashboard");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -340,28 +465,129 @@
       shortCorrect: scores.shortCorrect,
       answers: JSON.parse(JSON.stringify(state.answers))
     };
-const results = getResults();
-results.unshift(result);
 
-// Vẫn lưu một bản trên trình duyệt để dự phòng mất mạng.
-saveResults(results);
+    const results = getResults();
+    results.unshift(result);
+    saveResults(results);
+    state.latestResult = result;
+    renderResult(result);
+    showScreen("result");
 
-state.latestResult = result;
-renderResult(result);
-showScreen("result");
+    void saveResultToSupabase(result)
+      .then(() => showToast("Kết quả đã được lưu lên hệ thống."))
+      .catch((error) => {
+        console.error("Không lưu được kết quả lên Supabase:", error);
+        showToast("Chưa lưu được lên máy chủ. Kết quả vẫn còn trên thiết bị này.");
+      });
 
-// Gửi một bản lên Supabase.
-void saveResultToSupabase(result)
-  .then(() => {
-    showToast("Kết quả đã được lưu lên hệ thống.");
-  })
-  .catch((error) => {
-    console.error("Lỗi lưu Supabase:", error);
+    if (autoSubmitted) showToast("Hết giờ. Hệ thống đã tự động nộp bài.");
+  }
 
-    showToast(
-      "Chưa lưu được lên máy chủ. Kết quả vẫn còn trên thiết bị này."
-    );
-  });    if (autoSubmitted) showToast("Hết giờ. Hệ thống đã tự động nộp bài.");
+  async function saveResultToSupabase(result) {
+    if (!window.supabaseClient) {
+      throw new Error("Supabase chưa được khởi tạo.");
+    }
+
+    const payload = {
+      client_result_id: result.id,
+      exam_code: "VL-THPT-01",
+      student_name: result.name,
+      class_name: result.className,
+      score: result.score,
+      part1: result.part1,
+      part2: result.part2,
+      part3: result.part3,
+      mcq_correct: result.mcqCorrect,
+      tf_correct_statements: result.tfCorrectStatements,
+      short_correct: result.shortCorrect,
+      time_used_seconds: result.timeUsedSeconds,
+      auto_submitted: result.autoSubmitted,
+      answers: result.answers
+    };
+
+    const { error } = await window.supabaseClient
+      .from("exam_attempts")
+      .insert(payload);
+
+    if (error && error.code !== "23505") throw error;
+  }
+
+  async function getResultsFromSupabase() {
+    if (!window.supabaseClient) {
+      throw new Error("Supabase chưa được khởi tạo.");
+    }
+
+    const { data, error } = await window.supabaseClient
+      .from("exam_attempts")
+      .select(`
+        id,
+        student_name,
+        class_name,
+        score,
+        part1,
+        part2,
+        part3,
+        mcq_correct,
+        tf_correct_statements,
+        short_correct,
+        time_used_seconds,
+        auto_submitted,
+        submitted_at
+      `)
+      .order("submitted_at", { ascending: false });
+
+    if (error) throw error;
+    return data ?? [];
+  }
+
+  function mapSupabaseResult(row) {
+    return {
+      id: row.id,
+      name: row.student_name,
+      className: row.class_name,
+      score: Number(row.score),
+      part1: Number(row.part1),
+      part2: Number(row.part2),
+      part3: Number(row.part3),
+      mcqCorrect: Number(row.mcq_correct || 0),
+      tfCorrectStatements: Number(row.tf_correct_statements || 0),
+      shortCorrect: Number(row.short_correct || 0),
+      timeUsedSeconds: Number(row.time_used_seconds || 0),
+      autoSubmitted: Boolean(row.auto_submitted),
+      submittedAt: row.submitted_at
+    };
+  }
+
+  async function loadTeacherDashboard() {
+    if (!state.teacherUser) {
+      openTeacherLoginModal();
+      return;
+    }
+
+    const refreshButton = $("#refresh-dashboard-button");
+    if (refreshButton) {
+      refreshButton.disabled = true;
+      refreshButton.textContent = "Đang tải...";
+    }
+
+    try {
+      const rows = await getResultsFromSupabase();
+      state.dashboardResults = rows.map(mapSupabaseResult);
+      renderDashboard(state.dashboardResults);
+      showScreen("dashboard");
+    } catch (error) {
+      console.error("Không tải được bảng điểm:", error);
+      if (error.code === "42501" || /permission|policy|row-level/i.test(error.message || "")) {
+        showToast("Tài khoản này không có quyền xem bảng điểm.");
+      } else {
+        showToast(`Không tải được bảng điểm: ${error.message || "Lỗi không xác định"}`);
+      }
+    } finally {
+      if (refreshButton) {
+        refreshButton.disabled = false;
+        refreshButton.textContent = "Làm mới";
+      }
+    }
   }
 
   function calculateScores() {
@@ -494,8 +720,7 @@ void saveResultToSupabase(result)
     localStorage.setItem(STORAGE_KEY, JSON.stringify(results));
   }
 
-  function renderDashboard() {
-    const results = getResults();
+  function renderDashboard(results = state.dashboardResults) {
     const total = results.length;
     const average = total ? results.reduce((sum, result) => sum + result.score, 0) / total : 0;
     const highest = total ? Math.max(...results.map((result) => result.score)) : 0;
@@ -556,7 +781,7 @@ void saveResultToSupabase(result)
   }
 
   function renderResultsTable() {
-    const results = getResults();
+    const results = state.dashboardResults;
     const search = $("#search-result").value.trim().toLocaleLowerCase("vi");
     const classFilter = $("#class-filter").value;
     const filtered = results.filter((result) => {
@@ -623,7 +848,7 @@ void saveResultToSupabase(result)
   }
 
   function exportCsv() {
-    const results = getResults();
+    const results = state.dashboardResults;
     if (!results.length) {
       showToast("Chưa có dữ liệu để xuất.");
       return;
@@ -656,47 +881,6 @@ void saveResultToSupabase(result)
     renderDashboard();
     showToast("Đã xóa toàn bộ dữ liệu điểm.");
   }
-
-  async function saveResultToSupabase(result) {
-  if (!window.supabaseClient) {
-    throw new Error("Supabase chưa được khởi tạo.");
-  }
-
-  const payload = {
-    client_result_id: result.id,
-    exam_code: "VL-THPT-01",
-
-    student_name: result.name,
-    class_name: result.className,
-
-    score: result.score,
-    part1: result.part1,
-    part2: result.part2,
-    part3: result.part3,
-
-    mcq_correct: result.mcqCorrect,
-    tf_correct_statements: result.tfCorrectStatements,
-    short_correct: result.shortCorrect,
-
-    time_used_seconds: result.timeUsedSeconds,
-    auto_submitted: result.autoSubmitted,
-
-    answers: result.answers
-  };
-
-  const { error } = await window.supabaseClient
-    .from("exam_attempts")
-    .insert(payload);
-
-  if (error) {
-    // Mã 23505 nghĩa là kết quả này đã được lưu trước đó.
-    if (error.code === "23505") {
-      return;
-    }
-
-    throw error;
-  }
-}
 
   function formatDuration(totalSeconds) {
     const minutes = Math.floor(Number(totalSeconds || 0) / 60);
