@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Website luyện đề Vật lí THPT theo cấu trúc mới, chấm điểm và thống kê kết quả học sinh." />
+  <title>ANH HUÂN DẠY LÝ | Luyện đề THPT</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <header class="topbar">
+    <a class="brand" href="#" data-screen="home" aria-label="Về trang chủ">
+      <span class="brand-mark">H</span>
+      <span>
+        <strong>ANH HUÂN DẠY LÝ</strong>
+        <small>Luyện thi Vật lí THPT</small>
+      </span>
+    </a>
+
+    <nav class="nav" aria-label="Điều hướng chính">
+      <button class="nav-link active" data-screen="home">Trang chủ</button>
+      <button class="nav-link" data-screen="dashboard">Thống kê</button>
+    </nav>
+  </header>
+
+  <main>
+    <section id="home-screen" class="screen active">
+      <div class="hero">
+        <div class="hero-content">
+          <span class="eyebrow">HỆ THỐNG LUYỆN ĐỀ VẬT LÍ THPT</span>
+          <h1>Làm đề đúng cấu trúc.<br /><span>Biết rõ điểm yếu.</span></h1>
+          <p>
+            Mô phỏng đề Vật lí 50 phút với 3 dạng câu hỏi, chấm điểm tự động,
+            lưu lịch sử và thống kê kết quả ngay trên trình duyệt.
+          </p>
+
+          <div class="hero-pills">
+            <span>18 câu chọn đáp án</span>
+            <span>4 câu Đúng/Sai</span>
+            <span>6 câu trả lời ngắn</span>
+          </div>
+        </div>
+
+        <form id="start-form" class="start-card">
+          <div class="card-heading">
+            <span class="card-icon">✦</span>
+            <div>
+              <p>ĐỀ LUYỆN TỔNG HỢP SỐ 01</p>
+              <h2>Kiểm tra năng lực Vật lí THPT</h2>
+            </div>
+          </div>
+
+          <label>
+            Họ và tên học sinh
+            <input id="student-name" type="text" placeholder="Ví dụ: Nguyễn Minh Anh" maxlength="60" required />
+          </label>
+
+          <label>
+            Lớp
+            <input id="student-class" type="text" placeholder="Ví dụ: 12A1" maxlength="20" required />
+          </label>
+
+          <div class="exam-meta">
+            <div><strong>50</strong><span>phút</span></div>
+            <div><strong>28</strong><span>câu</span></div>
+            <div><strong>10</strong><span>điểm</span></div>
+          </div>
+
+          <button class="primary-button" type="submit">Bắt đầu làm bài</button>
+          <button id="load-sample-button" class="text-button" type="button">Nạp dữ liệu điểm mẫu để xem thống kê</button>
+        </form>
+      </div>
+
+      <section class="structure-section">
+        <div class="section-heading">
+          <span class="eyebrow dark">CẤU TRÚC BÀI THI</span>
+          <h2>Ba phần, chấm đúng thang điểm</h2>
+          <p>Điểm từng phần được hiển thị riêng để học sinh biết dạng câu nào cần cải thiện.</p>
+        </div>
+
+        <div class="structure-grid">
+          <article class="structure-card">
+            <span class="part-number">01</span>
+            <h3>Trắc nghiệm nhiều lựa chọn</h3>
+            <p>18 câu, mỗi câu chọn một trong bốn phương án.</p>
+            <div class="part-score"><strong>4,5</strong> điểm tối đa</div>
+          </article>
+
+          <article class="structure-card featured">
+            <span class="part-number">02</span>
+            <h3>Trắc nghiệm Đúng/Sai</h3>
+            <p>4 câu, mỗi câu gồm bốn nhận định được chấm lũy tiến.</p>
+            <div class="part-score"><strong>4,0</strong> điểm tối đa</div>
+          </article>
+
+          <article class="structure-card">
+            <span class="part-number">03</span>
+            <h3>Trắc nghiệm trả lời ngắn</h3>
+            <p>6 câu tính toán, nhập kết quả cuối cùng không kèm đơn vị.</p>
+            <div class="part-score"><strong>1,5</strong> điểm tối đa</div>
+          </article>
+        </div>
+      </section>
+    </section>
+
+    <section id="exam-screen" class="screen exam-screen">
+      <div class="exam-header">
+        <div>
+          <span class="eyebrow dark">ĐỀ LUYỆN TỔNG HỢP SỐ 01</span>
+          <h1>Kiểm tra năng lực Vật lí THPT</h1>
+          <p id="candidate-line"></p>
+        </div>
+
+        <div class="timer-card" id="timer-card">
+          <span>Thời gian còn lại</span>
+          <strong id="timer">50:00</strong>
+        </div>
+      </div>
+
+      <div class="exam-layout">
+        <aside class="question-map" aria-label="Danh sách câu hỏi">
+          <div class="progress-block">
+            <div class="progress-label">
+              <span>Tiến độ</span>
+              <strong id="progress-text">0/28</strong>
+            </div>
+            <div class="progress-track"><span id="progress-bar"></span></div>
+          </div>
+
+          <div id="question-navigation"></div>
+
+          <div class="map-legend">
+            <span><i class="legend-current"></i>Đang xem</span>
+            <span><i class="legend-done"></i>Đã trả lời</span>
+            <span><i class="legend-empty"></i>Chưa trả lời</span>
+          </div>
+
+          <button id="submit-exam-button" class="submit-button" type="button">Nộp bài</button>
+        </aside>
+
+        <section class="question-panel">
+          <div id="question-content"></div>
+
+          <div class="question-actions">
+            <button id="previous-button" class="secondary-button" type="button">← Câu trước</button>
+            <button id="next-button" class="primary-button compact" type="button">Câu tiếp theo →</button>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="result-screen" class="screen result-screen">
+      <div class="result-hero">
+        <div>
+          <span class="eyebrow">KẾT QUẢ BÀI LÀM</span>
+          <h1 id="result-name">Hoàn thành bài thi</h1>
+          <p id="result-message"></p>
+        </div>
+        <div class="score-ring">
+          <strong id="final-score">0.00</strong>
+          <span>/ 10</span>
+        </div>
+      </div>
+
+      <div class="result-grid">
+        <article class="result-card">
+          <span>Phần I</span>
+          <strong id="part-one-score">0.00</strong>
+          <small>/ 4,50 điểm</small>
+        </article>
+        <article class="result-card">
+          <span>Phần II</span>
+          <strong id="part-two-score">0.00</strong>
+          <small>/ 4,00 điểm</small>
+        </article>
+        <article class="result-card">
+          <span>Phần III</span>
+          <strong id="part-three-score">0.00</strong>
+          <small>/ 1,50 điểm</small>
+        </article>
+        <article class="result-card">
+          <span>Thời gian làm</span>
+          <strong id="time-used">0:00</strong>
+          <small>trên 50 phút</small>
+        </article>
+      </div>
+
+      <section class="review-section">
+        <div class="review-heading">
+          <div>
+            <span class="eyebrow dark">XEM LẠI BÀI LÀM</span>
+            <h2>Đáp án và lời giải</h2>
+          </div>
+          <div class="result-actions">
+            <button id="retry-button" class="secondary-button" type="button">Làm lại đề</button>
+            <button id="view-dashboard-button" class="primary-button compact" type="button">Xem thống kê</button>
+          </div>
+        </div>
+        <div id="review-list" class="review-list"></div>
+      </section>
+    </section>
+
+    <section id="dashboard-screen" class="screen dashboard-screen">
+      <div class="dashboard-heading">
+        <div>
+          <span class="eyebrow dark">BẢNG ĐIỂM HỌC SINH</span>
+          <h1>Thống kê kết quả luyện đề</h1>
+          <p>Dữ liệu được lưu trên trình duyệt đang sử dụng.</p>
+        </div>
+        <div class="dashboard-actions">
+          <button id="seed-dashboard-button" class="secondary-button" type="button">Nạp dữ liệu mẫu</button>
+          <button id="export-button" class="primary-button compact" type="button">Xuất CSV</button>
+        </div>
+      </div>
+
+      <div class="stats-grid">
+        <article class="stat-card"><span>Lượt làm bài</span><strong id="stat-attempts">0</strong><small>Tổng số kết quả</small></article>
+        <article class="stat-card"><span>Điểm trung bình</span><strong id="stat-average">0.00</strong><small>Trên thang điểm 10</small></article>
+        <article class="stat-card"><span>Điểm cao nhất</span><strong id="stat-highest">0.00</strong><small>Thành tích tốt nhất</small></article>
+        <article class="stat-card"><span>Tỉ lệ đạt ≥ 5</span><strong id="stat-pass-rate">0%</strong><small>Học sinh đạt yêu cầu</small></article>
+      </div>
+
+      <div class="dashboard-columns">
+        <section class="chart-card">
+          <div class="card-title-row">
+            <div><span class="eyebrow dark">PHÂN BỐ ĐIỂM</span><h2>Phổ điểm</h2></div>
+          </div>
+          <div id="distribution-chart" class="distribution-chart"></div>
+        </section>
+
+        <section class="chart-card">
+          <div class="card-title-row">
+            <div><span class="eyebrow dark">ĐIỂM THEO PHẦN</span><h2>Năng lực trung bình</h2></div>
+          </div>
+          <div id="part-chart" class="part-chart"></div>
+        </section>
+      </div>
+
+      <section class="table-card">
+        <div class="table-toolbar">
+          <div>
+            <span class="eyebrow dark">LỊCH SỬ LÀM BÀI</span>
+            <h2>Danh sách kết quả</h2>
+          </div>
+          <div class="filters">
+            <input id="search-result" type="search" placeholder="Tìm tên học sinh..." />
+            <select id="class-filter"><option value="">Tất cả lớp</option></select>
+            <button id="clear-results-button" class="danger-button" type="button">Xóa dữ liệu</button>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Học sinh</th>
+                <th>Lớp</th>
+                <th>Phần I</th>
+                <th>Phần II</th>
+                <th>Phần III</th>
+                <th>Tổng điểm</th>
+                <th>Thời gian</th>
+                <th>Ngày làm</th>
+              </tr>
+            </thead>
+            <tbody id="results-table-body"></tbody>
+          </table>
+        </div>
+        <div id="empty-results" class="empty-state">
+          <strong>Chưa có kết quả nào</strong>
+          <p>Hãy làm một bài thi hoặc nạp dữ liệu mẫu để xem thống kê.</p>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <div id="confirm-modal" class="modal" aria-hidden="true">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <span class="modal-icon">!</span>
+      <h2 id="modal-title">Nộp bài?</h2>
+      <p id="modal-message"></p>
+      <div class="modal-actions">
+        <button class="secondary-button" type="button" data-close-modal>Tiếp tục làm</button>
+        <button id="confirm-submit-button" class="submit-button compact" type="button">Nộp bài ngay</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
