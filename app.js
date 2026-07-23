@@ -19,6 +19,8 @@
     submitted: false,
     answers: createEmptyAnswers(),
     latestResult: null,
+    studentUser: null,
+    studentProfile: null,
     teacherUser: null,
     dashboardResults: [],
     teacherExams: [],
@@ -43,6 +45,7 @@
   async function initialize() {
     bindNavigation();
     bindHome();
+    bindStudentAuthControls();
     bindExamControls();
     bindResultControls();
     bindDashboardControls();
@@ -50,8 +53,7 @@
     bindExamManagerControls();
     renderDashboard([]);
     renderQuestionBuilderFields();
-    await restoreTeacherSession();
-    await loadPublishedExams();
+    await restoreCurrentSession();
   }
 
   function bindNavigation() {
@@ -71,16 +73,16 @@
   function bindHome() {
     $("#start-form").addEventListener("submit", async (event) => {
       event.preventDefault();
-      const name = $("#student-name").value.trim();
-      const className = $("#student-class").value.trim().toUpperCase();
       const selectedExam = state.examCatalog.find((exam) => exam.id === state.selectedExamId);
+      const profile = state.studentProfile;
 
-      if (!selectedExam) {
-        showToast("Vui lòng chọn một đề trong kho đề luyện.");
+      if (!state.studentUser || !profile) {
+        showToast("Vui lòng đăng nhập tài khoản học sinh trước.");
+        showStudentAuthScreen();
         return;
       }
-      if (!name || !className) {
-        showToast("Vui lòng nhập đầy đủ họ tên và lớp.");
+      if (!selectedExam) {
+        showToast("Vui lòng chọn một đề trong kho đề luyện.");
         return;
       }
 
@@ -88,14 +90,25 @@
       startButton.disabled = true;
       startButton.textContent = "Đang mở đề...";
       try {
-        startExam(name, className, selectedExam);
+        startExam(profile.fullName, profile.className, selectedExam);
       } finally {
         startButton.disabled = false;
         startButton.textContent = "Bắt đầu làm bài";
       }
     });
+  }
 
-    $("#home-teacher-button")?.addEventListener("click", openTeacherAccess);
+  function bindStudentAuthControls() {
+    $$('[data-student-auth-tab]').forEach((button) => {
+      button.addEventListener("click", () => switchStudentAuthMode(button.dataset.studentAuthTab));
+    });
+    $("#student-login-form")?.addEventListener("submit", handleStudentLogin);
+    $("#student-register-form")?.addEventListener("submit", handleStudentRegister);
+    $("#student-logout-button")?.addEventListener("click", handleStudentLogout);
+    $("#student-auth-teacher-button")?.addEventListener("click", openTeacherAccess);
+    $$('[data-toggle-password]').forEach((button) => {
+      button.addEventListener("click", () => toggleStudentPassword(button));
+    });
   }
 
   function bindExamControls() {
@@ -258,15 +271,275 @@
     button.disabled = false;
   }
 
-  async function restoreTeacherSession() {
-    if (!window.supabaseClient) return;
-    const { data, error } = await window.supabaseClient.auth.getSession();
+  function switchStudentAuthMode(mode) {
+    const selectedMode = mode === "register" ? "register" : "login";
+    $$('[data-student-auth-tab]').forEach((button) => {
+      const active = button.dataset.studentAuthTab === selectedMode;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-selected", String(active));
+    });
+    $$('[data-student-auth-panel]').forEach((panel) => {
+      const active = panel.dataset.studentAuthPanel === selectedMode;
+      panel.classList.toggle("active", active);
+      panel.hidden = !active;
+    });
+    $("#student-auth-title").textContent = selectedMode === "register" ? "Tạo tài khoản học sinh" : "Đăng nhập tài khoản";
+    $("#student-login-error").textContent = "";
+    $("#student-register-message").textContent = "";
+    $$('[data-toggle-password]').forEach((button) => {
+      const input = document.getElementById(button.dataset.togglePassword);
+      if (input) input.type = "password";
+      button.textContent = "Hiện";
+      button.setAttribute("aria-label", "Hiện mật khẩu");
+    });
+  }
+
+  function toggleStudentPassword(button) {
+    const input = document.getElementById(button.dataset.togglePassword);
+    if (!input) return;
+    const show = input.type === "password";
+    input.type = show ? "text" : "password";
+    button.textContent = show ? "Ẩn" : "Hiện";
+    button.setAttribute("aria-label", show ? "Ẩn mật khẩu" : "Hiện mật khẩu");
+    input.focus();
+  }
+
+  function setButtonLoading(button, loading, loadingText, normalText) {
+    if (!button) return;
+    button.disabled = loading;
+    const textElement = button.querySelector("span");
+    if (textElement) textElement.textContent = loading ? loadingText : normalText;
+    else button.textContent = loading ? loadingText : normalText;
+  }
+
+  async function isCurrentUserTeacher() {
+    if (!window.supabaseClient) return false;
+    const { data, error } = await window.supabaseClient.rpc("is_exam_teacher");
     if (error) {
-      console.error("Không đọc được phiên đăng nhập giáo viên:", error);
+      console.error("Không kiểm tra được quyền giáo viên:", error);
+      return false;
+    }
+    return data === true;
+  }
+
+  async function loadStudentProfile(user) {
+    const { data, error } = await window.supabaseClient
+      .from("student_profiles")
+      .select("user_id, full_name, class_name, created_at")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (error) throw error;
+
+    if (data) {
+      return {
+        userId: data.user_id,
+        fullName: data.full_name,
+        className: data.class_name,
+        email: user.email || ""
+      };
+    }
+
+    const fullName = String(user.user_metadata?.full_name || "").trim();
+    const className = String(user.user_metadata?.class_name || "").trim().toUpperCase();
+    if (!fullName || !className) {
+      throw new Error("Tài khoản chưa có hồ sơ học sinh. Hãy tạo lại tài khoản hoặc liên hệ giáo viên.");
+    }
+
+    const { data: inserted, error: insertError } = await window.supabaseClient
+      .from("student_profiles")
+      .upsert({ user_id: user.id, full_name: fullName, class_name: className }, { onConflict: "user_id" })
+      .select("user_id, full_name, class_name")
+      .single();
+    if (insertError) throw insertError;
+    return {
+      userId: inserted.user_id,
+      fullName: inserted.full_name,
+      className: inserted.class_name,
+      email: user.email || ""
+    };
+  }
+
+  async function activateStudentSession(user) {
+    state.studentUser = user;
+    state.teacherUser = null;
+    state.studentProfile = await loadStudentProfile(user);
+    updateStudentUi();
+    updateTeacherUi();
+    showScreen("home");
+    await loadPublishedExams();
+  }
+
+  async function restoreCurrentSession() {
+    if (!window.supabaseClient) {
+      showStudentAuthScreen("Supabase chưa được kết nối.");
       return;
     }
-    state.teacherUser = data.session?.user ?? null;
+
+    const { data, error } = await window.supabaseClient.auth.getUser();
+    if (error || !data?.user) {
+      showStudentAuthScreen();
+      return;
+    }
+
+    if (await isCurrentUserTeacher()) {
+      state.teacherUser = data.user;
+      state.studentUser = null;
+      state.studentProfile = null;
+      updateStudentUi();
+      updateTeacherUi();
+      showTeacherPanel("results");
+      await loadTeacherDashboard(true);
+      return;
+    }
+
+    try {
+      await activateStudentSession(data.user);
+    } catch (profileError) {
+      console.error("Không tải được hồ sơ học sinh:", profileError);
+      await window.supabaseClient.auth.signOut();
+      showStudentAuthScreen(profileError.message);
+    }
+  }
+
+  function showStudentAuthScreen(message = "") {
+    state.studentUser = null;
+    state.studentProfile = null;
+    state.teacherUser = null;
+    state.examCatalog = [];
+    state.selectedExamId = null;
+    updateStudentUi();
     updateTeacherUi();
+    state.screen = "student-auth";
+    $$(".screen").forEach((screen) => screen.classList.remove("active"));
+    $("#student-auth-screen")?.classList.add("active");
+    if (message) $("#student-login-error").textContent = message;
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function updateStudentUi() {
+    const loggedIn = Boolean(state.studentUser && state.studentProfile);
+    const profile = state.studentProfile;
+    const homeButton = $("#student-home-button");
+    const navAccount = $("#student-nav-account");
+    const logoutButton = $("#student-logout-button");
+    if (homeButton) homeButton.hidden = !loggedIn;
+    if (navAccount) navAccount.hidden = !loggedIn;
+    if (logoutButton) logoutButton.hidden = !loggedIn;
+    if (!loggedIn) return;
+
+    const initials = profile.fullName
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(-2)
+      .map((part) => part[0])
+      .join("")
+      .toUpperCase() || "HS";
+    $("#student-nav-avatar").textContent = initials;
+    $("#student-nav-name").textContent = profile.fullName;
+    $("#student-nav-class").textContent = `Lớp ${profile.className}`;
+    $("#student-current-avatar").textContent = initials;
+    $("#student-current-name").textContent = profile.fullName;
+    $("#student-current-meta").textContent = `Lớp ${profile.className} · ${profile.email}`;
+  }
+
+  async function handleStudentLogin(event) {
+    event.preventDefault();
+    if (!window.supabaseClient) return;
+    const email = $("#student-login-email").value.trim();
+    const password = $("#student-login-password").value;
+    const errorElement = $("#student-login-error");
+    const button = $("#student-login-submit");
+    errorElement.textContent = "";
+    setButtonLoading(button, true, "Đang đăng nhập...", "Đăng nhập và chọn đề");
+
+    try {
+      const { data, error } = await window.supabaseClient.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      if (await isCurrentUserTeacher()) {
+        await window.supabaseClient.auth.signOut();
+        throw new Error("Đây là tài khoản giáo viên. Hãy dùng nút “Tôi là giáo viên”.");
+      }
+      await activateStudentSession(data.user);
+      $("#student-login-form").reset();
+      showToast("Đăng nhập học sinh thành công.");
+    } catch (loginError) {
+      console.error("Lỗi đăng nhập học sinh:", loginError);
+      errorElement.textContent = loginError.message === "Invalid login credentials"
+        ? "Email hoặc mật khẩu không chính xác."
+        : (loginError.message || "Không thể đăng nhập. Vui lòng thử lại.");
+    } finally {
+      setButtonLoading(button, false, "Đang đăng nhập...", "Đăng nhập và chọn đề");
+    }
+  }
+
+  async function handleStudentRegister(event) {
+    event.preventDefault();
+    if (!window.supabaseClient) return;
+    const fullName = $("#student-register-name").value.trim();
+    const className = $("#student-register-class").value.trim().toUpperCase();
+    const email = $("#student-register-email").value.trim();
+    const password = $("#student-register-password").value;
+    const confirmPassword = $("#student-register-confirm-password").value;
+    const messageElement = $("#student-register-message");
+    const button = $("#student-register-submit");
+
+    messageElement.className = "student-auth-message";
+    messageElement.textContent = "";
+    if (fullName.length < 2 || !className) {
+      messageElement.classList.add("error");
+      messageElement.textContent = "Vui lòng nhập đúng họ tên và lớp.";
+      return;
+    }
+    if (password.length < 6) {
+      messageElement.classList.add("error");
+      messageElement.textContent = "Mật khẩu cần có ít nhất 6 ký tự.";
+      return;
+    }
+    if (password !== confirmPassword) {
+      messageElement.classList.add("error");
+      messageElement.textContent = "Hai lần nhập mật khẩu chưa khớp.";
+      return;
+    }
+
+    setButtonLoading(button, true, "Đang tạo tài khoản...", "Tạo tài khoản học sinh");
+    try {
+      const { data, error } = await window.supabaseClient.auth.signUp({
+        email,
+        password,
+        options: {
+          data: { full_name: fullName, class_name: className, role: "student" },
+          emailRedirectTo: window.location.origin
+        }
+      });
+      if (error) throw error;
+
+      if (data.session && data.user) {
+        await activateStudentSession(data.user);
+        $("#student-register-form").reset();
+        showToast("Tạo tài khoản và đăng nhập thành công.");
+      } else {
+        messageElement.classList.add("success");
+        messageElement.textContent = "Tài khoản đã được tạo. Hãy mở email để xác nhận, sau đó quay lại đăng nhập.";
+        $("#student-register-form").reset();
+        window.setTimeout(() => switchStudentAuthMode("login"), 3500);
+      }
+    } catch (registerError) {
+      console.error("Lỗi tạo tài khoản học sinh:", registerError);
+      messageElement.classList.add("error");
+      messageElement.textContent = registerError.message || "Không thể tạo tài khoản. Vui lòng thử lại.";
+    } finally {
+      setButtonLoading(button, false, "Đang tạo tài khoản...", "Tạo tài khoản học sinh");
+    }
+  }
+
+  async function handleStudentLogout() {
+    if (state.screen === "exam" && !state.submitted) {
+      if (!window.confirm("Bài làm đang diễn ra. Đăng xuất sẽ kết thúc bài đang làm. Bạn có chắc không?")) return;
+      stopTimer();
+    }
+    if (window.supabaseClient) await window.supabaseClient.auth.signOut();
+    showStudentAuthScreen();
+    showToast("Đã đăng xuất tài khoản học sinh.");
   }
 
   function updateTeacherUi() {
@@ -292,6 +565,15 @@
       showTeacherPanel("results");
       await loadTeacherDashboard(true);
       return;
+    }
+
+    if (state.studentUser) {
+      const shouldSwitch = window.confirm("Bạn đang đăng nhập tài khoản học sinh. Hệ thống sẽ đăng xuất học sinh để chuyển sang giáo viên. Tiếp tục?");
+      if (!shouldSwitch) return;
+      await window.supabaseClient.auth.signOut();
+      state.studentUser = null;
+      state.studentProfile = null;
+      showStudentAuthScreen();
     }
     openTeacherLoginModal();
   }
@@ -366,7 +648,14 @@
     try {
       const { data, error } = await window.supabaseClient.auth.signInWithPassword({ email, password });
       if (error) throw error;
+      if (!(await isCurrentUserTeacher())) {
+        await window.supabaseClient.auth.signOut();
+        throw new Error("Tài khoản này không có quyền giáo viên.");
+      }
       state.teacherUser = data.user;
+      state.studentUser = null;
+      state.studentProfile = null;
+      updateStudentUi();
       updateTeacherUi();
       closeTeacherLoginModal();
       showTeacherPanel("results");
@@ -395,13 +684,17 @@
     state.examDraft = null;
     updateTeacherUi();
     renderDashboard([]);
-    showScreen("home");
+    showStudentAuthScreen();
     showToast("Đã đăng xuất tài khoản giáo viên.");
   }
 
   function showScreen(screenName) {
     if (screenName === "dashboard" && !state.teacherUser) {
       openTeacherLoginModal();
+      return;
+    }
+    if (["home", "exam", "result"].includes(screenName) && !state.studentUser) {
+      showStudentAuthScreen();
       return;
     }
     state.screen = screenName;
@@ -413,6 +706,10 @@
   }
 
   function startExam(name, className, exam) {
+    if (!state.studentUser || !state.studentProfile) {
+      showStudentAuthScreen("Vui lòng đăng nhập tài khoản học sinh trước khi làm đề.");
+      return;
+    }
     state.candidate = { name, className };
     state.activeExam = exam;
     state.items = buildExamItems(exam.data);
@@ -685,6 +982,7 @@
       client_result_id: result.id,
       exam_id: result.examId,
       exam_code: result.examCode,
+      student_user_id: state.studentUser?.id || null,
       student_name: result.name,
       class_name: result.className,
       score: result.score,

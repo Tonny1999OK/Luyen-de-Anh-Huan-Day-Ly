@@ -20,13 +20,130 @@
     </a>
 
     <nav class="nav" aria-label="Điều hướng chính">
-      <button class="nav-link active" data-screen="home" type="button">Trang chủ</button>
+      <button id="student-home-button" class="nav-link" data-screen="home" type="button" hidden>Kho đề</button>
+      <span id="student-nav-account" class="student-nav-account" hidden>
+        <span id="student-nav-avatar" class="student-nav-avatar">HS</span>
+        <span>
+          <strong id="student-nav-name">Học sinh</strong>
+          <small id="student-nav-class">Lớp --</small>
+        </span>
+      </span>
+      <button id="student-logout-button" class="nav-link student-logout-nav" type="button" hidden>Đăng xuất</button>
       <button id="teacher-dashboard-button" class="nav-link" type="button">Giáo viên</button>
     </nav>
   </header>
 
   <main>
-    <section id="home-screen" class="screen active">
+    <section id="student-auth-screen" class="screen student-auth-screen active">
+      <div class="student-auth-shell">
+        <section class="student-auth-intro">
+          <a class="student-auth-brand" href="#" aria-label="ANH HUÂN DẠY LÝ">
+            <span class="brand-mark">H</span>
+            <span>
+              <strong>ANH HUÂN DẠY LÝ</strong>
+              <small>Hệ thống luyện đề Vật lí THPT</small>
+            </span>
+          </a>
+
+          <span class="student-auth-eyebrow">LUYỆN ĐỀ CÁ NHÂN HÓA</span>
+          <h1>Đăng nhập trước khi<br /><span>chọn đề để luyện.</span></h1>
+          <p>
+            Tài khoản giúp hệ thống nhận đúng học sinh, lưu điểm theo từng đề
+            và giữ lại lịch sử luyện tập trên nhiều thiết bị.
+          </p>
+
+          <div class="student-auth-benefits">
+            <article><strong>01</strong><span>Chọn đề trong kho đề giáo viên đã xuất bản</span></article>
+            <article><strong>02</strong><span>Điểm được lưu đúng tài khoản và lớp học</span></article>
+            <article><strong>03</strong><span>Đăng nhập lại để tiếp tục theo dõi tiến bộ</span></article>
+          </div>
+        </section>
+
+        <section class="student-auth-card" aria-labelledby="student-auth-title">
+          <div class="student-auth-card-heading">
+            <span class="student-auth-icon" aria-hidden="true">HS</span>
+            <div>
+              <span class="eyebrow dark">KHU VỰC HỌC SINH</span>
+              <h2 id="student-auth-title">Đăng nhập tài khoản</h2>
+            </div>
+          </div>
+
+          <div class="student-auth-tabs" role="tablist" aria-label="Đăng nhập hoặc tạo tài khoản">
+            <button class="student-auth-tab active" type="button" role="tab" aria-selected="true" data-student-auth-tab="login">Đăng nhập</button>
+            <button class="student-auth-tab" type="button" role="tab" aria-selected="false" data-student-auth-tab="register">Tạo tài khoản</button>
+          </div>
+
+          <form id="student-login-form" class="student-auth-form active" data-student-auth-panel="login">
+            <label class="student-auth-field">
+              <span>Email học sinh</span>
+              <input id="student-login-email" type="email" inputmode="email" autocomplete="email" placeholder="hocsinh@gmail.com" required />
+            </label>
+
+            <label class="student-auth-field">
+              <span>Mật khẩu</span>
+              <span class="student-password-wrap">
+                <input id="student-login-password" type="password" autocomplete="current-password" placeholder="Nhập mật khẩu" minlength="6" required />
+                <button class="student-password-toggle" type="button" data-toggle-password="student-login-password" aria-label="Hiện mật khẩu">Hiện</button>
+              </span>
+            </label>
+
+            <p id="student-login-error" class="student-auth-message error" role="alert" aria-live="polite"></p>
+
+            <button id="student-login-submit" class="student-auth-submit" type="submit">
+              <span>Đăng nhập và chọn đề</span>
+              <span aria-hidden="true">→</span>
+            </button>
+          </form>
+
+          <form id="student-register-form" class="student-auth-form" data-student-auth-panel="register" hidden>
+            <div class="student-register-grid">
+              <label class="student-auth-field student-register-wide">
+                <span>Họ và tên học sinh</span>
+                <input id="student-register-name" type="text" autocomplete="name" placeholder="Ví dụ: Nguyễn Minh Anh" maxlength="80" required />
+              </label>
+
+              <label class="student-auth-field">
+                <span>Lớp</span>
+                <input id="student-register-class" type="text" placeholder="Ví dụ: 12A1" maxlength="20" required />
+              </label>
+
+              <label class="student-auth-field">
+                <span>Email</span>
+                <input id="student-register-email" type="email" inputmode="email" autocomplete="email" placeholder="hocsinh@gmail.com" required />
+              </label>
+
+              <label class="student-auth-field">
+                <span>Mật khẩu</span>
+                <span class="student-password-wrap">
+                  <input id="student-register-password" type="password" autocomplete="new-password" placeholder="Tối thiểu 6 ký tự" minlength="6" required />
+                  <button class="student-password-toggle" type="button" data-toggle-password="student-register-password" aria-label="Hiện mật khẩu">Hiện</button>
+                </span>
+              </label>
+
+              <label class="student-auth-field">
+                <span>Nhập lại mật khẩu</span>
+                <span class="student-password-wrap">
+                  <input id="student-register-confirm-password" type="password" autocomplete="new-password" placeholder="Nhập lại mật khẩu" minlength="6" required />
+                  <button class="student-password-toggle" type="button" data-toggle-password="student-register-confirm-password" aria-label="Hiện mật khẩu">Hiện</button>
+                </span>
+              </label>
+            </div>
+
+            <p id="student-register-message" class="student-auth-message" role="status" aria-live="polite"></p>
+
+            <button id="student-register-submit" class="student-auth-submit" type="submit">
+              <span>Tạo tài khoản học sinh</span>
+              <span aria-hidden="true">→</span>
+            </button>
+          </form>
+
+          <div class="student-auth-divider"><span>hoặc</span></div>
+          <button id="student-auth-teacher-button" class="student-teacher-access" type="button">Tôi là giáo viên</button>
+        </section>
+      </div>
+    </section>
+
+    <section id="home-screen" class="screen">
       <div class="hero">
         <div class="hero-content">
           <span class="eyebrow">HỆ THỐNG LUYỆN ĐỀ VẬT LÍ THPT</span>
@@ -52,15 +169,14 @@
             </div>
           </div>
 
-          <label>
-            Họ và tên học sinh
-            <input id="student-name" type="text" placeholder="Ví dụ: Nguyễn Minh Anh" maxlength="60" required />
-          </label>
-
-          <label>
-            Lớp
-            <input id="student-class" type="text" placeholder="Ví dụ: 12A1" maxlength="20" required />
-          </label>
+          <div class="student-current-card">
+            <span id="student-current-avatar" class="student-current-avatar">HS</span>
+            <span class="student-current-copy">
+              <small>Đang luyện đề với tài khoản</small>
+              <strong id="student-current-name">Học sinh</strong>
+              <span id="student-current-meta">Lớp --</span>
+            </span>
+          </div>
 
           <div class="exam-meta">
             <div><strong id="selected-exam-duration">--</strong><span>phút</span></div>
@@ -69,7 +185,6 @@
           </div>
 
           <button id="start-exam-submit" class="primary-button" type="submit" disabled>Bắt đầu làm bài</button>
-          <button id="home-teacher-button" class="text-button" type="button">Dành cho giáo viên · Xem bảng điểm</button>
         </form>
       </div>
 
@@ -77,7 +192,7 @@
         <div class="section-heading exam-library-heading">
           <span class="eyebrow dark">KHO ĐỀ LUYỆN</span>
           <h2 id="exam-library-title">Chọn đề phù hợp để bắt đầu</h2>
-          <p>Giáo viên có thể thêm và xuất bản nhiều đề. Học sinh chọn một đề trước khi nhập thông tin và làm bài.</p>
+          <p>Bạn đã đăng nhập. Hãy chọn một đề phù hợp rồi bắt đầu làm bài; kết quả sẽ được lưu đúng tài khoản của bạn.</p>
         </div>
         <div id="exam-catalog-status" class="catalog-status">Đang tải danh sách đề...</div>
         <div id="exam-catalog" class="exam-catalog-grid"></div>
