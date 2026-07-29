@@ -478,6 +478,39 @@ td { color: var(--slate-700); font-size: 13px; }
   display: block;
 }
 
+.teacher-login-alternative {
+  display: grid;
+  justify-items: start;
+  gap: 5px;
+  margin-top: -7px;
+}
+
+.teacher-magic-link-button {
+  padding: 0;
+  border: 0;
+  color: #1d4ed8;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 850;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.teacher-magic-link-button:hover:not(:disabled) {
+  color: var(--navy-900);
+}
+
+.teacher-magic-link-button:disabled {
+  opacity: .62;
+  cursor: wait;
+}
+
+.teacher-login-alternative small {
+  color: var(--slate-500);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .teacher-login-error {
   min-height: 20px;
   margin: -3px 0 0;
@@ -485,6 +518,10 @@ td { color: var(--slate-700); font-size: 13px; }
   font-size: 12px;
   font-weight: 800;
   line-height: 1.5;
+}
+
+.teacher-login-error.success {
+  color: #15803d;
 }
 
 .teacher-login-actions {

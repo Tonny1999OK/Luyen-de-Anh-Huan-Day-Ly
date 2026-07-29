@@ -149,6 +149,7 @@
   function bindTeacherControls() {
     $("#teacher-dashboard-button")?.addEventListener("click", openTeacherAccess);
     $("#teacher-login-form")?.addEventListener("submit", handleTeacherLogin);
+    $("#teacher-magic-link-button")?.addEventListener("click", handleTeacherMagicLink);
     $("#close-teacher-login")?.addEventListener("click", closeTeacherLoginModal);
     $("#toggle-teacher-password")?.addEventListener("click", toggleTeacherPassword);
     $$('[data-close-teacher-login]').forEach((element) => {
@@ -581,7 +582,7 @@
   function openTeacherLoginModal() {
     const modal = $("#teacher-login-modal");
     if (!modal) return;
-    $("#teacher-login-error").textContent = "";
+    setTeacherLoginMessage("");
     resetTeacherPasswordVisibility();
     modal.classList.add("open");
     modal.setAttribute("aria-hidden", "false");
@@ -597,7 +598,7 @@
     const modal = $("#teacher-login-modal");
     if (!modal) return;
     $("#teacher-password").value = "";
-    $("#teacher-login-error").textContent = "";
+    setTeacherLoginMessage("");
     resetTeacherPasswordVisibility();
     modal.classList.remove("open");
     modal.setAttribute("aria-hidden", "true");
@@ -628,19 +629,42 @@
     }
   }
 
+  function setTeacherLoginMessage(message, type = "error") {
+    const element = $("#teacher-login-error");
+    if (!element) return;
+    element.textContent = message;
+    element.classList.toggle("success", type === "success");
+  }
+
+  function getTeacherLoginErrorMessage(error) {
+    const message = String(error?.message || "").toLowerCase();
+    if (error?.code === "not_teacher") {
+      return "Tài khoản đăng nhập được nhưng chưa có quyền giáo viên.";
+    }
+    if (message.includes("invalid login credentials")) {
+      return "Mật khẩu không đúng hoặc tài khoản chưa được đặt mật khẩu. Hãy dùng liên kết đăng nhập qua email bên dưới.";
+    }
+    if (message.includes("email not confirmed")) {
+      return "Email chưa được xác nhận. Hãy mở email Supabase đã gửi rồi thử lại.";
+    }
+    if (message.includes("rate limit") || message.includes("too many requests")) {
+      return "Bạn đã thử quá nhiều lần. Hãy chờ một lúc rồi thử lại.";
+    }
+    return error?.message || "Không thể đăng nhập. Vui lòng thử lại.";
+  }
+
   async function handleTeacherLogin(event) {
     event.preventDefault();
     if (!window.supabaseClient) {
-      $("#teacher-login-error").textContent = "Supabase chưa được khởi tạo.";
+      setTeacherLoginMessage("Supabase chưa được khởi tạo.");
       return;
     }
 
-    const email = $("#teacher-email").value.trim();
+    const email = $("#teacher-email").value.trim().toLowerCase();
     const password = $("#teacher-password").value;
     const submitButton = $("#teacher-login-submit");
-    const errorElement = $("#teacher-login-error");
 
-    errorElement.textContent = "";
+    setTeacherLoginMessage("");
     submitButton.disabled = true;
     submitButton.classList.add("is-loading");
     submitButton.querySelector("span").textContent = "Đang đăng nhập...";
@@ -650,7 +674,9 @@
       if (error) throw error;
       if (!(await isCurrentUserTeacher())) {
         await window.supabaseClient.auth.signOut();
-        throw new Error("Tài khoản này không có quyền giáo viên.");
+        const permissionError = new Error("Tài khoản này không có quyền giáo viên.");
+        permissionError.code = "not_teacher";
+        throw permissionError;
       }
       state.teacherUser = data.user;
       state.studentUser = null;
@@ -663,11 +689,60 @@
       showToast("Đăng nhập giáo viên thành công.");
     } catch (error) {
       console.error("Lỗi đăng nhập giáo viên:", error);
-      errorElement.textContent = "Email, mật khẩu hoặc quyền giáo viên không hợp lệ.";
+      setTeacherLoginMessage(getTeacherLoginErrorMessage(error));
     } finally {
       submitButton.disabled = false;
       submitButton.classList.remove("is-loading");
       submitButton.querySelector("span").textContent = "Đăng nhập";
+    }
+  }
+
+  async function handleTeacherMagicLink() {
+    if (!window.supabaseClient) {
+      setTeacherLoginMessage("Supabase chưa được khởi tạo.");
+      return;
+    }
+
+    const emailInput = $("#teacher-email");
+    const email = emailInput?.value.trim().toLowerCase() || "";
+    const button = $("#teacher-magic-link-button");
+
+    if (!email) {
+      setTeacherLoginMessage("Hãy nhập email giáo viên trước.");
+      emailInput?.focus();
+      return;
+    }
+
+    setTeacherLoginMessage("");
+    button.disabled = true;
+    const originalText = button.textContent;
+    button.textContent = "Đang gửi liên kết...";
+
+    try {
+      const redirectUrl = `${window.location.origin}${window.location.pathname}`;
+      const { error } = await window.supabaseClient.auth.signInWithOtp({
+        email,
+        options: {
+          shouldCreateUser: false,
+          emailRedirectTo: redirectUrl
+        }
+      });
+      if (error) throw error;
+      setTeacherLoginMessage(
+        "Đã gửi liên kết đăng nhập. Mở email trên cùng thiết bị, bấm liên kết rồi website sẽ tự vào trang giáo viên.",
+        "success"
+      );
+    } catch (error) {
+      console.error("Không gửi được liên kết đăng nhập giáo viên:", error);
+      const message = String(error?.message || "").toLowerCase();
+      setTeacherLoginMessage(
+        message.includes("rate limit") || message.includes("too many requests")
+          ? "Supabase đang giới hạn gửi email. Hãy chờ một lúc rồi thử lại."
+          : (error?.message || "Không gửi được liên kết đăng nhập.")
+      );
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
     }
   }
 
