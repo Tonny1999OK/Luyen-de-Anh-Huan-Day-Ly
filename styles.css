@@ -2023,3 +2023,154 @@ textarea:focus { border-color: var(--navy-700); box-shadow: 0 0 0 4px rgba(30,79
     grid-column: 2;
   }
 }
+
+
+/* ============================================================
+   BẢNG VÀ ĐỒ THỊ VẬT LÍ
+   ============================================================ */
+.rich-text-paragraph {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.rich-text-paragraph + .physics-table-block,
+.rich-text-paragraph + .physics-chart-block {
+  margin-top: 18px;
+}
+
+.physics-table-block,
+.physics-chart-block {
+  width: 100%;
+  margin: 22px 0 28px;
+  overflow: hidden;
+  border: 1px solid #d8e2ef;
+  border-radius: 18px;
+  background: #ffffff;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
+}
+
+.physics-visual-heading {
+  display: grid;
+  gap: 4px;
+  padding: 16px 20px;
+  border-bottom: 1px solid #dce6f2;
+  background: linear-gradient(135deg, #eff6ff, #f8fafc);
+}
+
+.physics-visual-heading span {
+  color: #1d4ed8;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+}
+
+.physics-visual-heading strong {
+  color: #0f172a;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.physics-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-color: #94a3b8 #e2e8f0;
+  scrollbar-width: thin;
+}
+
+.physics-data-table {
+  width: 100%;
+  min-width: 640px;
+  border-collapse: separate;
+  border-spacing: 0;
+  color: #1e293b;
+  font-size: 14px;
+}
+
+.physics-data-table th,
+.physics-data-table td {
+  padding: 15px 18px;
+  border-right: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+  line-height: 1.55;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.physics-data-table tr > *:last-child {
+  border-right: 0;
+}
+
+.physics-data-table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.physics-data-table thead th {
+  color: #ffffff;
+  background: linear-gradient(135deg, #173b70, #245b9f);
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.physics-data-table tbody th {
+  min-width: 230px;
+  color: #173b70;
+  background: #f1f6fc;
+  font-weight: 850;
+  text-align: left;
+}
+
+.physics-data-table tbody tr:nth-child(even) td {
+  background: #f8fafc;
+}
+
+.physics-data-table tbody tr:hover td,
+.physics-data-table tbody tr:hover th {
+  background: #eef6ff;
+}
+
+.physics-chart-container {
+  position: relative;
+  width: 100%;
+  height: 390px;
+  padding: 22px;
+}
+
+.physics-chart-container canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.question-context .physics-table-block,
+.question-context .physics-chart-block,
+.shared-passage-content .physics-table-block,
+.shared-passage-content .physics-chart-block {
+  margin-bottom: 6px;
+}
+
+@media (max-width: 760px) {
+  .physics-table-block,
+  .physics-chart-block {
+    margin: 18px 0 22px;
+    border-radius: 14px;
+  }
+
+  .physics-visual-heading {
+    padding: 13px 15px;
+  }
+
+  .physics-data-table {
+    min-width: 590px;
+    font-size: 13px;
+  }
+
+  .physics-data-table th,
+  .physics-data-table td {
+    padding: 12px 14px;
+  }
+
+  .physics-chart-container {
+    height: 310px;
+    padding: 14px;
+  }
+}

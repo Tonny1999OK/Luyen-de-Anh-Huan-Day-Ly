@@ -34,6 +34,19 @@
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => [...document.querySelectorAll(selector)];
 
+  const physicsChartInstances = [];
+
+  function destroyPhysicsCharts() {
+    while (physicsChartInstances.length > 0) {
+      const chart = physicsChartInstances.pop();
+      try {
+        chart.destroy();
+      } catch (error) {
+        console.warn("Không hủy được đồ thị cũ:", error);
+      }
+    }
+  }
+
   function createEmptyAnswers() {
     return { mcq: {}, tf: {}, short: {} };
   }
@@ -866,6 +879,7 @@
   }
 
   function renderFullExam() {
+    destroyPhysicsCharts();
     const container = $("#question-content");
     if (!container) return;
     if (!state.items.length) {
@@ -914,6 +928,7 @@
     }).join("");
 
     bindFullExamInputs();
+    window.requestAnimationFrame(() => renderPhysicsCharts());
   }
 
   function renderQuestionGroupWithPassages(items) {
@@ -935,20 +950,22 @@
 
   function renderSharedPassage(passage) {
     const imageUrl = passage?.imageUrl || passage?.image_url || passage?.figureUrl || "";
+    const ownerKey = `passage-${String(passage.id || "")}`;
     return `
       <aside id="passage-${escapeHtml(String(passage.id || ""))}" class="shared-passage-block">
         <div class="shared-passage-heading">
           <span>DỮ KIỆN DÙNG CHUNG</span>
           <strong>${escapeHtml(passage.title || "Đọc đoạn dữ kiện sau")}</strong>
         </div>
-        <div class="shared-passage-content">${renderLongText(passage.content)}</div>
+        <div class="shared-passage-content">${renderRichContent(passage.content)}</div>
+        ${renderPhysicsVisuals(passage.visuals, ownerKey)}
         ${imageUrl ? `<figure class="question-media"><img src="${escapeHtml(String(imageUrl))}" alt="Hình minh họa cho đoạn dữ kiện" loading="lazy" /></figure>` : ""}
       </aside>`;
   }
 
   function renderQuestionContext(question) {
     const context = String(question?.context || "").trim();
-    return context ? `<div class="question-context question-own-context">${renderLongText(context)}</div>` : "";
+    return context ? `<div class="question-context question-own-context">${renderRichContent(context)}</div>` : "";
   }
 
   function renderFullQuestion(item, globalIndex) {
@@ -973,6 +990,183 @@
       </article>`;
   }
 
+  function renderPhysicsTable(table) {
+    if (!table || typeof table !== "object") return "";
+
+    const headers = Array.isArray(table.headers) ? table.headers.map((item) => String(item ?? "")) : [];
+    const rows = Array.isArray(table.rows) ? table.rows.filter(Array.isArray) : [];
+    if (headers.length < 2 || rows.length === 0) return "";
+
+    const caption = String(table.caption || table.title || "").trim();
+    const columnCount = headers.length;
+    const normalizedRows = rows.map((row) => {
+      const cells = row.slice(0, columnCount).map((item) => String(item ?? ""));
+      while (cells.length < columnCount) cells.push("");
+      return cells;
+    });
+
+    return `
+      <section class="physics-table-block">
+        ${caption ? `
+          <div class="physics-visual-heading">
+            <span>BẢNG SỐ LIỆU</span>
+            <strong>${escapeHtml(caption)}</strong>
+          </div>` : ""}
+        <div class="physics-table-scroll" tabindex="0" aria-label="Bảng số liệu có thể cuộn ngang">
+          <table class="physics-data-table">
+            <thead>
+              <tr>${headers.map((header) => `<th scope="col">${renderLongText(header)}</th>`).join("")}</tr>
+            </thead>
+            <tbody>
+              ${normalizedRows.map((row) => `
+                <tr>
+                  ${row.map((cell, cellIndex) => cellIndex === 0
+                    ? `<th scope="row">${renderLongText(cell)}</th>`
+                    : `<td>${renderLongText(cell)}</td>`).join("")}
+                </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+      </section>`;
+  }
+
+  function renderPhysicsChartPlaceholder(chart, ownerKey, index) {
+    if (!chart || typeof chart !== "object") return "";
+
+    const chartId = `physics-chart-${ownerKey}-${index}`.replace(/[^a-zA-Z0-9-_]/g, "-");
+    let encodedConfig = "";
+    try {
+      encodedConfig = encodeURIComponent(JSON.stringify(chart));
+    } catch (error) {
+      console.error("Không mã hóa được dữ liệu đồ thị:", error);
+      return "";
+    }
+
+    return `
+      <section class="physics-chart-block">
+        <div class="physics-visual-heading">
+          <span>ĐỒ THỊ</span>
+          <strong>${escapeHtml(String(chart.title || "Đồ thị Vật lí"))}</strong>
+        </div>
+        <div class="physics-chart-container">
+          <canvas id="${chartId}" data-physics-chart="${escapeHtml(encodedConfig)}" role="img" aria-label="${escapeHtml(String(chart.title || "Đồ thị Vật lí"))}"></canvas>
+        </div>
+      </section>`;
+  }
+
+  function renderPhysicsVisuals(visuals, ownerKey) {
+    if (!Array.isArray(visuals)) return "";
+
+    return visuals.map((visual, index) => {
+      const type = String(visual?.type || visual?.kind || "").toLowerCase();
+      if (type === "table") return renderPhysicsTable(visual);
+      if (["chart", "line", "bar", "scatter", "piecewise", "coordinate"].includes(type)) {
+        const chart = type === "chart" ? visual : { ...visual, chartType: visual.chartType || type };
+        return renderPhysicsChartPlaceholder(chart, ownerKey, index);
+      }
+      return "";
+    }).join("");
+  }
+
+  function renderPhysicsCharts() {
+    destroyPhysicsCharts();
+    const canvases = $$('[data-physics-chart]');
+    if (!canvases.length) return;
+
+    if (!window.Chart) {
+      console.error("Chart.js chưa được tải. Bảng vẫn hoạt động nhưng đồ thị chưa thể hiển thị.");
+      return;
+    }
+
+    const palette = [
+      { border: "#1d4ed8", background: "rgba(29, 78, 216, 0.14)" },
+      { border: "#dc2626", background: "rgba(220, 38, 38, 0.12)" },
+      { border: "#059669", background: "rgba(5, 150, 105, 0.12)" },
+      { border: "#d97706", background: "rgba(217, 119, 6, 0.12)" }
+    ];
+
+    canvases.forEach((canvas) => {
+      let chart;
+      try {
+        chart = JSON.parse(decodeURIComponent(canvas.dataset.physicsChart || ""));
+      } catch (error) {
+        console.error("Dữ liệu đồ thị không hợp lệ:", error);
+        return;
+      }
+
+      const requestedType = String(chart.chartType || chart.type || "line").toLowerCase();
+      const chartType = requestedType === "coordinate" || requestedType === "piecewise"
+        ? "line"
+        : (["line", "bar", "scatter"].includes(requestedType) ? requestedType : "line");
+      const rawDatasets = Array.isArray(chart.datasets) ? chart.datasets : [];
+      const usesPointObjects = rawDatasets.some((dataset) => {
+        const source = Array.isArray(dataset?.data) ? dataset.data : (Array.isArray(dataset?.points) ? dataset.points : []);
+        return source.some((point) => point && typeof point === "object" && "x" in point && "y" in point);
+      });
+
+      const datasets = rawDatasets.map((dataset, datasetIndex) => {
+        const paletteItem = palette[datasetIndex % palette.length];
+        const source = Array.isArray(dataset?.data) ? dataset.data : (Array.isArray(dataset?.points) ? dataset.points : []);
+        const data = usesPointObjects || chartType === "scatter"
+          ? source.map((point) => ({ x: Number(point?.x), y: Number(point?.y) }))
+              .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+          : source.map((value) => {
+              const numberValue = Number(value);
+              return Number.isFinite(numberValue) ? numberValue : null;
+            });
+
+        return {
+          label: String(dataset?.label || `Dữ liệu ${datasetIndex + 1}`),
+          data,
+          borderColor: paletteItem.border,
+          backgroundColor: paletteItem.background,
+          borderWidth: 2.5,
+          pointRadius: chartType === "bar" ? 0 : 4,
+          pointHoverRadius: 6,
+          tension: requestedType === "piecewise" ? 0 : 0.2,
+          fill: Boolean(dataset?.fill),
+          showLine: chartType !== "scatter" || Boolean(dataset?.showLine)
+        };
+      });
+
+      const instance = new window.Chart(canvas, {
+        type: chartType,
+        data: {
+          labels: usesPointObjects || chartType === "scatter"
+            ? undefined
+            : (Array.isArray(chart.labels) ? chart.labels.map(String) : []),
+          datasets
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: { duration: 450 },
+          interaction: { intersect: false, mode: "nearest" },
+          plugins: {
+            legend: { display: datasets.length > 1 || datasets.some((dataset) => !dataset.label.startsWith("Dữ liệu")), position: "bottom" },
+            tooltip: { enabled: true }
+          },
+          scales: {
+            x: {
+              type: usesPointObjects || chartType === "scatter" ? "linear" : "category",
+              title: { display: Boolean(chart.xLabel), text: String(chart.xLabel || "") },
+              grid: { color: "rgba(148, 163, 184, 0.18)" },
+              ticks: { color: "#475569" }
+            },
+            y: {
+              beginAtZero: Boolean(chart.beginAtZero),
+              title: { display: Boolean(chart.yLabel), text: String(chart.yLabel || "") },
+              grid: { color: "rgba(148, 163, 184, 0.22)" },
+              ticks: { color: "#475569" }
+            }
+          }
+        }
+      });
+
+      physicsChartInstances.push(instance);
+    });
+  }
+
   function renderQuestionMedia(question) {
     const imageUrl = question?.imageUrl || question?.image_url || question?.figureUrl || question?.mediaUrl || "";
     if (!imageUrl) return "";
@@ -988,7 +1182,8 @@
     return `
       <div class="question-body">
         ${renderQuestionContext(item.question)}
-        <div class="question-stem">${renderLongText(item.question.stem)}</div>
+        <div class="question-stem">${renderRichContent(item.question.stem)}</div>
+        ${renderPhysicsVisuals(item.question.visuals, `question-${globalIndex}`)}
         ${renderQuestionMedia(item.question)}
         <div class="option-list">
           ${(item.question.options || []).map((option, index) => `
@@ -1005,6 +1200,7 @@
     return `
       <div class="question-body">
         ${renderQuestionContext(item.question)}
+        ${renderPhysicsVisuals(item.question.visuals, `question-${globalIndex}`)}
         ${renderQuestionMedia(item.question)}
         <div class="tf-list">
           ${(item.question.statements || []).map((statement, index) => `
@@ -1023,7 +1219,8 @@
     return `
       <div class="question-body">
         ${renderQuestionContext(item.question)}
-        <div class="question-stem">${renderLongText(item.question.stem)}</div>
+        <div class="question-stem">${renderRichContent(item.question.stem)}</div>
+        ${renderPhysicsVisuals(item.question.visuals, `question-${globalIndex}`)}
         ${renderQuestionMedia(item.question)}
         <div class="short-answer-box">
           <label for="short-answer-${globalIndex}">Nhập kết quả cuối cùng</label>
@@ -2163,6 +2360,87 @@
 
   function renderLongText(value) {
     return escapeHtml(value).replace(/\r?\n/g, "<br>");
+  }
+
+  function parsePipeTableRow(line) {
+    const parts = String(line || "").trim().split("|").map((cell) => cell.trim());
+    if (parts[0] === "") parts.shift();
+    if (parts[parts.length - 1] === "") parts.pop();
+    return parts;
+  }
+
+  function isMarkdownSeparatorRow(cells) {
+    return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(String(cell).trim()));
+  }
+
+  function isPipeTableStart(lines, index) {
+    if (index + 1 >= lines.length) return false;
+    const first = parsePipeTableRow(lines[index]);
+    const second = parsePipeTableRow(lines[index + 1]);
+    const firstPipeCount = (String(lines[index]).match(/\|/g) || []).length;
+    const secondPipeCount = (String(lines[index + 1]).match(/\|/g) || []).length;
+    return firstPipeCount >= 2 && secondPipeCount >= 2 && first.length >= 3 && second.length === first.length;
+  }
+
+  function renderRichContent(value) {
+    const text = String(value ?? "").replace(/\r/g, "").trim();
+    if (!text) return "";
+
+    const lines = text.split("\n");
+    const blocks = [];
+    let paragraphLines = [];
+
+    const flushParagraph = () => {
+      while (paragraphLines.length && !paragraphLines[0].trim()) paragraphLines.shift();
+      while (paragraphLines.length && !paragraphLines[paragraphLines.length - 1].trim()) paragraphLines.pop();
+      if (!paragraphLines.length) return;
+      blocks.push(`<div class="rich-text-paragraph">${renderLongText(paragraphLines.join("\n"))}</div>`);
+      paragraphLines = [];
+    };
+
+    for (let index = 0; index < lines.length;) {
+      if (!isPipeTableStart(lines, index)) {
+        paragraphLines.push(lines[index]);
+        index += 1;
+        continue;
+      }
+
+      let caption = "";
+      const precedingLine = String(paragraphLines[paragraphLines.length - 1] || "").trim();
+      if (/^bảng(?:\s+.*)?[:：]?$/i.test(precedingLine)) {
+        paragraphLines.pop();
+        caption = precedingLine.replace(/[:：]\s*$/, "").trim();
+        if (caption.toLowerCase() === "bảng") caption = "Bảng số liệu";
+      }
+
+      flushParagraph();
+      const header = parsePipeTableRow(lines[index]);
+      const rows = [];
+      index += 1;
+
+      if (index < lines.length) {
+        const possibleSeparator = parsePipeTableRow(lines[index]);
+        if (possibleSeparator.length === header.length && isMarkdownSeparatorRow(possibleSeparator)) index += 1;
+      }
+
+      while (index < lines.length) {
+        const rawLine = lines[index];
+        const pipeCount = (String(rawLine).match(/\|/g) || []).length;
+        const row = parsePipeTableRow(rawLine);
+        if (pipeCount < 2 || row.length !== header.length) break;
+        rows.push(row);
+        index += 1;
+      }
+
+      if (rows.length) {
+        blocks.push(renderPhysicsTable({ caption, headers: header, rows }));
+      } else {
+        paragraphLines.push(header.join(" | "));
+      }
+    }
+
+    flushParagraph();
+    return blocks.join("");
   }
 
   let toastTimeout;
