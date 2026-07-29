@@ -39,7 +39,7 @@
   }
 
   function createEmptyExamData() {
-    return { mcq: [], trueFalse: [], shortAnswer: [] };
+    return { passages: [], mcq: [], trueFalse: [], shortAnswer: [] };
   }
 
   function deepClone(value) {
@@ -57,6 +57,7 @@
     bindExamManagerControls();
     renderDashboard([]);
     renderQuestionBuilderFields();
+    bindAutoGrowTextareas();
     await restoreCurrentSession();
   }
 
@@ -175,6 +176,7 @@
     $("#delete-exam-button")?.addEventListener("click", deleteCurrentExam);
     $("#question-type-input")?.addEventListener("change", renderQuestionBuilderFields);
     $("#add-question-button")?.addEventListener("click", addQuestionToDraft);
+    $("#add-passage-button")?.addEventListener("click", addPassageToDraft);
   }
 
   async function loadPublishedExams() {
@@ -220,6 +222,7 @@
       isPublished: Boolean(row.is_published),
       createdAt: row.created_at,
       data: {
+        passages: Array.isArray(examData.passages) ? examData.passages : [],
         mcq: Array.isArray(examData.mcq) ? examData.mcq : [],
         trueFalse: Array.isArray(examData.trueFalse) ? examData.trueFalse : [],
         shortAnswer: Array.isArray(examData.shortAnswer) ? examData.shortAnswer : []
@@ -905,12 +908,47 @@
             <strong>${items.length} câu</strong>
           </header>
           <div class="exam-question-list">
-            ${items.map((item) => renderFullQuestion(item, state.items.indexOf(item))).join("")}
+            ${renderQuestionGroupWithPassages(items)}
           </div>
         </section>`;
     }).join("");
 
     bindFullExamInputs();
+  }
+
+  function renderQuestionGroupWithPassages(items) {
+    const renderedPassages = new Set();
+    return items.map((item) => {
+      const globalIndex = state.items.indexOf(item);
+      const passageId = String(item.question?.passageId || "").trim();
+      let passageHtml = "";
+      if (passageId && !renderedPassages.has(passageId)) {
+        const passage = (state.activeExam?.data?.passages || []).find((entry) => String(entry.id) === passageId);
+        if (passage) {
+          renderedPassages.add(passageId);
+          passageHtml = renderSharedPassage(passage);
+        }
+      }
+      return `${passageHtml}${renderFullQuestion(item, globalIndex)}`;
+    }).join("");
+  }
+
+  function renderSharedPassage(passage) {
+    const imageUrl = passage?.imageUrl || passage?.image_url || passage?.figureUrl || "";
+    return `
+      <aside id="passage-${escapeHtml(String(passage.id || ""))}" class="shared-passage-block">
+        <div class="shared-passage-heading">
+          <span>DỮ KIỆN DÙNG CHUNG</span>
+          <strong>${escapeHtml(passage.title || "Đọc đoạn dữ kiện sau")}</strong>
+        </div>
+        <div class="shared-passage-content">${renderLongText(passage.content)}</div>
+        ${imageUrl ? `<figure class="question-media"><img src="${escapeHtml(String(imageUrl))}" alt="Hình minh họa cho đoạn dữ kiện" loading="lazy" /></figure>` : ""}
+      </aside>`;
+  }
+
+  function renderQuestionContext(question) {
+    const context = String(question?.context || "").trim();
+    return context ? `<div class="question-context question-own-context">${renderLongText(context)}</div>` : "";
   }
 
   function renderFullQuestion(item, globalIndex) {
@@ -949,12 +987,13 @@
     const selected = state.answers.mcq[item.question.id];
     return `
       <div class="question-body">
-        <div class="question-stem">${item.question.stem || ""}</div>
+        ${renderQuestionContext(item.question)}
+        <div class="question-stem">${renderLongText(item.question.stem)}</div>
         ${renderQuestionMedia(item.question)}
         <div class="option-list">
           ${(item.question.options || []).map((option, index) => `
             <button class="option-button ${selected === index ? "selected" : ""}" type="button" data-mcq-index="${globalIndex}" data-mcq-option="${index}" aria-pressed="${selected === index}">
-              <span class="option-letter">${String.fromCharCode(65 + index)}</span><span>${option}</span>
+              <span class="option-letter">${String.fromCharCode(65 + index)}</span><span>${renderLongText(option)}</span>
             </button>
           `).join("")}
         </div>
@@ -965,13 +1004,13 @@
     const selected = state.answers.tf[item.question.id] || {};
     return `
       <div class="question-body">
-        <div class="question-context">${item.question.context || ""}</div>
+        ${renderQuestionContext(item.question)}
         ${renderQuestionMedia(item.question)}
         <div class="tf-list">
           ${(item.question.statements || []).map((statement, index) => `
             <div class="tf-row" data-tf-row="${index}">
               <span class="tf-label">${String.fromCharCode(97 + index)})</span>
-              <span class="tf-text">${statement.text || ""}</span>
+              <span class="tf-text">${renderLongText(statement.text)}</span>
               <button class="tf-choice true ${selected[index] === true ? "selected" : ""}" type="button" data-tf-question-index="${globalIndex}" data-tf-index="${index}" data-tf-value="true" aria-pressed="${selected[index] === true}">Đúng</button>
               <button class="tf-choice false ${selected[index] === false ? "selected" : ""}" type="button" data-tf-question-index="${globalIndex}" data-tf-index="${index}" data-tf-value="false" aria-pressed="${selected[index] === false}">Sai</button>
             </div>`).join("")}
@@ -983,7 +1022,8 @@
     const value = state.answers.short[item.question.id] ?? "";
     return `
       <div class="question-body">
-        <div class="question-stem">${item.question.stem || ""}</div>
+        ${renderQuestionContext(item.question)}
+        <div class="question-stem">${renderLongText(item.question.stem)}</div>
         ${renderQuestionMedia(item.question)}
         <div class="short-answer-box">
           <label for="short-answer-${globalIndex}">Nhập kết quả cuối cùng</label>
@@ -1706,8 +1746,10 @@
     $("#publish-exam-button").textContent = draft.isPublished ? "Gỡ xuất bản" : "Xuất bản";
     $("#delete-exam-button").disabled = !draft.id;
     updateDraftCounts();
+    renderDraftPassageList();
     renderDraftQuestionList();
     renderQuestionBuilderFields();
+    bindAutoGrowTextareas();
   }
 
   function readMetadataIntoDraft() {
@@ -1747,47 +1789,65 @@
     $("#draft-short-count").classList.toggle("complete", counts.short === 6);
   }
 
+  function getPassageOptions(selectedValue = "") {
+    const passages = state.examDraft?.data?.passages || [];
+    return [
+      `<option value="">Không dùng đoạn dữ kiện chung</option>`,
+      ...passages.map((passage) => `<option value="${escapeHtml(String(passage.id))}" ${String(passage.id) === String(selectedValue) ? "selected" : ""}>${escapeHtml(passage.title || passage.id)}</option>`)
+    ].join("");
+  }
+
   function renderQuestionBuilderFields() {
     const container = $("#question-builder-fields");
     if (!container) return;
     const type = $("#question-type-input")?.value || "mcq";
+    const passageField = `<label class="builder-wide">Đoạn dữ kiện dùng chung<select id="qb-passage-id">${getPassageOptions()}</select><small class="field-hint">Chọn một đoạn đã lưu ở phía trên. Nội dung dài không phải lặp lại trong từng câu.</small></label>`;
+
     if (type === "mcq") {
       container.innerHTML = `
         <div class="builder-grid">
           <label>Chủ đề<input id="qb-topic" placeholder="Ví dụ: Dao động" /></label>
-          <label class="builder-wide">Nội dung câu hỏi<textarea id="qb-stem" rows="3"></textarea></label>
-          ${["A", "B", "C", "D"].map((letter, index) => `<label>Phương án ${letter}<input id="qb-option-${index}" /></label>`).join("")}
+          ${passageField}
+          <label class="builder-wide">Dữ kiện riêng của câu (tùy chọn)<textarea id="qb-context" class="long-content-textarea" rows="6" data-auto-grow placeholder="Không giới hạn ký tự"></textarea></label>
+          <label class="builder-wide">Nội dung câu hỏi<textarea id="qb-stem" class="long-content-textarea" rows="6" data-auto-grow placeholder="Không giới hạn ký tự"></textarea><small class="field-hint">Không đặt maxlength. Có thể dán nguyên văn đoạn dài, công thức và xuống dòng.</small></label>
+          ${["A", "B", "C", "D"].map((letter, index) => `<label>Phương án ${letter}<textarea id="qb-option-${index}" rows="3" data-auto-grow placeholder="Phương án có thể dài"></textarea></label>`).join("")}
           <label>Đáp án đúng<select id="qb-mcq-answer"><option value="0">A</option><option value="1">B</option><option value="2">C</option><option value="3">D</option></select></label>
-          <label class="builder-wide">Lời giải<textarea id="qb-explanation" rows="3"></textarea></label>
+          <label class="builder-wide">Lời giải<textarea id="qb-explanation" class="long-content-textarea" rows="6" data-auto-grow placeholder="Không giới hạn ký tự"></textarea></label>
         </div>`;
+      bindAutoGrowTextareas();
       return;
     }
     if (type === "tf") {
       container.innerHTML = `
         <div class="builder-grid">
           <label>Chủ đề<input id="qb-topic" placeholder="Ví dụ: Khí lí tưởng" /></label>
-          <label class="builder-wide">Dữ kiện chung<textarea id="qb-context" rows="3"></textarea></label>
+          ${passageField}
+          <label class="builder-wide">Dữ kiện riêng của câu<textarea id="qb-context" class="long-content-textarea" rows="10" data-auto-grow placeholder="Không giới hạn ký tự"></textarea><small class="field-hint">Nếu đã chọn đoạn dữ kiện chung, ô này chỉ cần ghi phần bổ sung riêng cho câu.</small></label>
         </div>
         <div class="tf-builder-list">
           ${[0, 1, 2, 3].map((index) => `
-            <div class="tf-builder-row">
+            <div class="tf-builder-row long-row">
               <strong>${String.fromCharCode(97 + index)})</strong>
-              <input id="qb-statement-${index}" placeholder="Nhận định ${index + 1}" />
+              <textarea id="qb-statement-${index}" rows="3" data-auto-grow placeholder="Nhận định ${index + 1}, không giới hạn ký tự"></textarea>
               <select id="qb-tf-answer-${index}"><option value="true">Đúng</option><option value="false">Sai</option></select>
-              <input id="qb-tf-explanation-${index}" placeholder="Giải thích ngắn" />
+              <textarea id="qb-tf-explanation-${index}" rows="3" data-auto-grow placeholder="Giải thích, không giới hạn ký tự"></textarea>
             </div>`).join("")}
         </div>`;
+      bindAutoGrowTextareas();
       return;
     }
     container.innerHTML = `
       <div class="builder-grid">
         <label>Chủ đề<input id="qb-topic" placeholder="Ví dụ: Điện năng" /></label>
-        <label class="builder-wide">Nội dung câu hỏi<textarea id="qb-stem" rows="3"></textarea></label>
+        ${passageField}
+        <label class="builder-wide">Dữ kiện riêng của câu (tùy chọn)<textarea id="qb-context" class="long-content-textarea" rows="6" data-auto-grow placeholder="Không giới hạn ký tự"></textarea></label>
+        <label class="builder-wide">Nội dung câu hỏi<textarea id="qb-stem" class="long-content-textarea" rows="6" data-auto-grow placeholder="Không giới hạn ký tự"></textarea></label>
         <label>Đáp án số<input id="qb-short-answer" inputmode="decimal" placeholder="Ví dụ: 14.4" /></label>
         <label>Sai số cho phép<input id="qb-tolerance" inputmode="decimal" value="0.01" /></label>
         <label>Đơn vị<input id="qb-unit" placeholder="Ví dụ: kJ" /></label>
-        <label class="builder-wide">Lời giải<textarea id="qb-explanation" rows="3"></textarea></label>
+        <label class="builder-wide">Lời giải<textarea id="qb-explanation" class="long-content-textarea" rows="6" data-auto-grow placeholder="Không giới hạn ký tự"></textarea></label>
       </div>`;
+    bindAutoGrowTextareas();
   }
 
   function addQuestionToDraft() {
@@ -1799,36 +1859,103 @@
     const topic = $("#qb-topic")?.value.trim() || "Vật lí";
     const id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
     const counts = getExamCounts(state.examDraft.data);
+    const passageId = $("#qb-passage-id")?.value || "";
+    const context = $("#qb-context")?.value.trim() || "";
 
     if (type === "mcq") {
       if (counts.mcq >= 18) return showToast("Phần I đã đủ 18 câu.");
       const stem = $("#qb-stem").value.trim();
       const options = [0, 1, 2, 3].map((index) => $(`#qb-option-${index}`).value.trim());
       if (!stem || options.some((option) => !option)) return showToast("Hãy nhập nội dung và đủ bốn phương án.");
-      state.examDraft.data.mcq.push({ id, topic, stem, options, answer: Number($("#qb-mcq-answer").value), explanation: $("#qb-explanation").value.trim() });
+      state.examDraft.data.mcq.push({ id, topic, passageId, context, stem, options, answer: Number($("#qb-mcq-answer").value), explanation: $("#qb-explanation").value.trim() });
     } else if (type === "tf") {
       if (counts.tf >= 4) return showToast("Phần II đã đủ 4 câu.");
-      const context = $("#qb-context").value.trim();
       const statements = [0, 1, 2, 3].map((index) => ({
         text: $(`#qb-statement-${index}`).value.trim(),
         answer: $(`#qb-tf-answer-${index}`).value === "true",
         explanation: $(`#qb-tf-explanation-${index}`).value.trim()
       }));
-      if (!context || statements.some((statement) => !statement.text)) return showToast("Hãy nhập dữ kiện và đủ bốn nhận định.");
-      state.examDraft.data.trueFalse.push({ id, topic, context, statements });
+      if ((!context && !passageId) || statements.some((statement) => !statement.text)) return showToast("Hãy chọn đoạn dữ kiện chung hoặc nhập dữ kiện riêng, đồng thời nhập đủ bốn nhận định.");
+      state.examDraft.data.trueFalse.push({ id, topic, passageId, context, statements });
     } else {
       if (counts.short >= 6) return showToast("Phần III đã đủ 6 câu.");
       const stem = $("#qb-stem").value.trim();
       const answer = parseNumericAnswer($("#qb-short-answer").value);
       const tolerance = parseNumericAnswer($("#qb-tolerance").value);
       if (!stem || !Number.isFinite(answer) || !Number.isFinite(tolerance) || tolerance < 0) return showToast("Hãy nhập câu hỏi, đáp án số và sai số hợp lệ.");
-      state.examDraft.data.shortAnswer.push({ id, topic, stem, answer, tolerance, unit: $("#qb-unit").value.trim(), explanation: $("#qb-explanation").value.trim() });
+      state.examDraft.data.shortAnswer.push({ id, topic, passageId, context, stem, answer, tolerance, unit: $("#qb-unit").value.trim(), explanation: $("#qb-explanation").value.trim() });
     }
 
     updateDraftCounts();
     renderDraftQuestionList();
     renderQuestionBuilderFields();
     showToast("Đã thêm câu hỏi vào bản nháp.");
+  }
+
+  function addPassageToDraft() {
+    if (!state.examDraft) return showToast("Hãy tạo hoặc chọn một đề trước.");
+    const title = $("#passage-title-input")?.value.trim() || "Đoạn dữ kiện dùng chung";
+    const content = $("#passage-content-input")?.value.trim() || "";
+    if (!content) return showToast("Hãy nhập nội dung đoạn dữ kiện.");
+    const rawId = $("#passage-id-input")?.value.trim() || title;
+    const id = rawId.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `passage-${Date.now()}`;
+    state.examDraft.data.passages ||= [];
+    if (state.examDraft.data.passages.some((passage) => String(passage.id) === id)) {
+      return showToast("Mã đoạn dữ kiện đã tồn tại. Hãy dùng mã khác.");
+    }
+    state.examDraft.data.passages.push({ id, title, content });
+    $("#passage-id-input").value = "";
+    $("#passage-title-input").value = "";
+    $("#passage-content-input").value = "";
+    renderDraftPassageList();
+    renderQuestionBuilderFields();
+    showToast("Đã thêm đoạn dữ kiện dùng chung.");
+  }
+
+  function renderDraftPassageList() {
+    const container = $("#draft-passage-list");
+    if (!container) return;
+    const passages = state.examDraft?.data?.passages || [];
+    if (!passages.length) {
+      container.innerHTML = `<p class="field-hint passage-empty">Chưa có đoạn dữ kiện dùng chung.</p>`;
+      return;
+    }
+    container.innerHTML = passages.map((passage) => `
+      <details class="draft-passage-item">
+        <summary><strong>${escapeHtml(passage.title || passage.id)}</strong><span>${String(passage.content || "").length.toLocaleString("vi-VN")} ký tự</span></summary>
+        <div class="draft-passage-full">${renderLongText(passage.content)}</div>
+        <button class="danger-button compact-question-delete" type="button" data-delete-passage-id="${escapeHtml(String(passage.id))}">Xóa đoạn dữ kiện</button>
+      </details>`).join("");
+    $$('[data-delete-passage-id]').forEach((button) => button.addEventListener("click", () => deletePassageFromDraft(button.dataset.deletePassageId)));
+  }
+
+  function deletePassageFromDraft(passageId) {
+    if (!state.examDraft) return;
+    const usedCount = buildExamItems(state.examDraft.data).filter((item) => String(item.question?.passageId || "") === String(passageId)).length;
+    if (usedCount && !window.confirm(`Đoạn dữ kiện đang được ${usedCount} câu sử dụng. Xóa đoạn này và bỏ liên kết khỏi các câu?`)) return;
+    state.examDraft.data.passages = (state.examDraft.data.passages || []).filter((passage) => String(passage.id) !== String(passageId));
+    [state.examDraft.data.mcq, state.examDraft.data.trueFalse, state.examDraft.data.shortAnswer].forEach((questions) => {
+      (questions || []).forEach((question) => {
+        if (String(question.passageId || "") === String(passageId)) question.passageId = "";
+      });
+    });
+    renderDraftPassageList();
+    renderQuestionBuilderFields();
+    showToast("Đã xóa đoạn dữ kiện.");
+  }
+
+  function bindAutoGrowTextareas() {
+    $$('textarea[data-auto-grow]').forEach((textarea) => {
+      const resize = () => {
+        textarea.style.height = "auto";
+        textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, 96), 720)}px`;
+      };
+      if (!textarea.dataset.autoGrowBound) {
+        textarea.addEventListener("input", resize);
+        textarea.dataset.autoGrowBound = "true";
+      }
+      resize();
+    });
   }
 
   function renderDraftQuestionList() {
@@ -1842,11 +1969,19 @@
       container.innerHTML = `<div class="empty-state"><strong>Đề chưa có câu hỏi</strong><p>Chọn loại câu hỏi và thêm từng câu ở phía trên.</p></div>`;
       return;
     }
-    container.innerHTML = items.map((item) => `
-      <article class="draft-question-item">
-        <div><span>${typeLabel(item.type)} · Câu ${item.number}</span><strong>${escapeHtml(truncate(item.type === "tf" ? item.question.context : item.question.stem, 150))}</strong></div>
-        <button class="danger-button compact-question-delete" type="button" data-delete-question-type="${item.type}" data-delete-question-id="${item.question.id}">Xóa</button>
-      </article>`).join("");
+    container.innerHTML = items.map((item) => {
+      const fullText = item.type === "tf" ? item.question.context : item.question.stem;
+      const passage = (state.examDraft.data.passages || []).find((entry) => String(entry.id) === String(item.question.passageId || ""));
+      return `
+        <article class="draft-question-item long-question-item">
+          <details>
+            <summary><span>${typeLabel(item.type)} · Câu ${item.number}</span><strong>${escapeHtml(truncate(fullText, 180))}</strong></summary>
+            ${passage ? `<p class="draft-linked-passage">Dùng đoạn dữ kiện: <strong>${escapeHtml(passage.title || passage.id)}</strong></p>` : ""}
+            <div class="draft-question-full">${renderLongText(fullText)}</div>
+          </details>
+          <button class="danger-button compact-question-delete" type="button" data-delete-question-type="${item.type}" data-delete-question-id="${item.question.id}">Xóa</button>
+        </article>`;
+    }).join("");
     $$('[data-delete-question-id]').forEach((button) => button.addEventListener("click", () => {
       deleteDraftQuestion(button.dataset.deleteQuestionType, button.dataset.deleteQuestionId);
     }));
@@ -2024,6 +2159,10 @@
 
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" }[character]));
+  }
+
+  function renderLongText(value) {
+    return escapeHtml(value).replace(/\r?\n/g, "<br>");
   }
 
   let toastTimeout;

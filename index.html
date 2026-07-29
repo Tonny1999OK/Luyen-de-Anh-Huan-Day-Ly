@@ -447,7 +447,7 @@
                 <label>Mã đề<input id="exam-code-input" maxlength="40" placeholder="Ví dụ: VL-THPT-02" /></label>
                 <label>Thời gian (phút)<input id="exam-duration-input" type="number" min="10" max="180" value="50" /></label>
                 <label class="metadata-wide">Tên đề<input id="exam-title-input" maxlength="150" placeholder="Tên đề luyện" /></label>
-                <label class="metadata-wide">Mô tả<textarea id="exam-description-input" rows="3" maxlength="500" placeholder="Mô tả ngắn cho học sinh"></textarea></label>
+                <label class="metadata-wide">Mô tả<textarea id="exam-description-input" rows="4" data-auto-grow placeholder="Mô tả cho học sinh, không giới hạn ký tự"></textarea><small class="field-hint">Không đặt giới hạn ký tự. Nội dung dài sẽ tự mở rộng.</small></label>
               </div>
 
               <div class="question-count-strip">
@@ -455,6 +455,19 @@
                 <div><strong id="draft-tf-count">0/4</strong><span>Đúng/Sai</span></div>
                 <div><strong id="draft-short-count">0/6</strong><span>Trả lời ngắn</span></div>
               </div>
+
+              <section class="question-builder-card passage-builder-card">
+                <div class="manager-card-heading">
+                  <div><span class="eyebrow dark">ĐOẠN DỮ KIỆN DÙNG CHUNG</span><h3>Lưu một lần, dùng cho nhiều câu</h3></div>
+                </div>
+                <div class="builder-grid">
+                  <label>Mã đoạn dữ kiện<input id="passage-id-input" placeholder="Tự tạo nếu để trống" /></label>
+                  <label>Tiêu đề<input id="passage-title-input" placeholder="Ví dụ: Dữ kiện cho câu 1 đến câu 4" /></label>
+                  <label class="builder-wide">Nội dung đoạn dữ kiện<textarea id="passage-content-input" class="long-content-textarea" rows="10" data-auto-grow placeholder="Dán toàn bộ đoạn văn, bảng số liệu, mô tả thí nghiệm hoặc dữ kiện dài. Không giới hạn ký tự."></textarea><small class="field-hint">Đoạn này chỉ lưu một lần. Các câu hỏi bên dưới có thể cùng tham chiếu đến đoạn dữ kiện này.</small></label>
+                </div>
+                <button id="add-passage-button" class="secondary-button" type="button">Thêm đoạn dữ kiện</button>
+                <div id="draft-passage-list" class="draft-passage-list"></div>
+              </section>
 
               <section class="question-builder-card">
                 <div class="manager-card-heading">
