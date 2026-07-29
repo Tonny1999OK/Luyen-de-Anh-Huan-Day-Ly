@@ -230,26 +230,52 @@
       </section>
     </section>
 
-    <section id="exam-screen" class="screen exam-screen">
-      <div class="exam-header">
-        <div>
-          <span id="active-exam-code" class="eyebrow dark">ĐỀ LUYỆN VẬT LÍ</span>
-          <h1 id="active-exam-title">Kiểm tra năng lực Vật lí THPT</h1>
-          <p id="candidate-line"></p>
-        </div>
+    <section id="exam-screen" class="screen exam-screen full-exam-screen">
+      <div id="exam-command-bar" class="exam-command-bar">
+        <div class="exam-command-inner">
+          <div class="exam-command-meta">
+            <span id="active-exam-code" class="eyebrow dark">ĐỀ LUYỆN VẬT LÍ</span>
+            <strong id="active-exam-title">Kiểm tra năng lực Vật lí THPT</strong>
+            <small id="candidate-line"></small>
+          </div>
 
-        <div class="timer-card" id="timer-card">
-          <span>Thời gian còn lại</span>
-          <strong id="timer">50:00</strong>
+          <div class="exam-command-actions">
+            <div class="command-progress" aria-label="Tiến độ làm bài">
+              <span>Đã hoàn thành</span>
+              <strong id="command-progress-text" data-progress-text>0/28</strong>
+            </div>
+
+            <div class="timer-card compact-timer" id="timer-card">
+              <span>Thời gian còn lại</span>
+              <strong id="timer">50:00</strong>
+            </div>
+
+            <button id="mobile-question-map-button" class="secondary-button question-map-toggle" type="button" aria-controls="question-map" aria-expanded="false">
+              Danh sách câu
+            </button>
+            <button id="submit-exam-button" class="submit-button compact" type="button" data-submit-exam>Nộp bài</button>
+          </div>
         </div>
       </div>
 
-      <div class="exam-layout">
-        <aside class="question-map" aria-label="Danh sách câu hỏi">
+      <div class="exam-layout full-exam-layout">
+        <main class="full-exam-main" aria-label="Toàn bộ nội dung đề thi">
+          <div id="question-content" class="full-exam-content"></div>
+        </main>
+
+        <aside id="question-map" class="question-map full-question-map" aria-label="Danh sách câu hỏi" aria-hidden="false">
+          <div class="question-map-mobile-heading">
+            <div>
+              <span class="eyebrow dark">ĐIỀU HƯỚNG</span>
+              <strong>Danh sách câu</strong>
+            </div>
+            <button id="close-question-map-button" class="question-map-close" type="button" aria-label="Đóng danh sách câu">×</button>
+          </div>
+
           <div class="progress-block">
             <div class="progress-label">
               <span>Tiến độ</span>
-              <strong id="progress-text">0/28</strong>
+              <strong id="progress-text" data-progress-text>0/28</strong>
             </div>
             <div class="progress-track"><span id="progress-bar"></span></div>
           </div>
@@ -258,22 +284,26 @@
 
           <div class="map-legend">
             <span><i class="legend-current"></i>Đang xem</span>
-            <span><i class="legend-done"></i>Đã trả lời</span>
+            <span><i class="legend-done"></i>Đã hoàn thành</span>
+            <span><i class="legend-partial"></i>Chưa làm đủ</span>
+            <span><i class="legend-marked"></i>Đánh dấu xem lại</span>
             <span><i class="legend-empty"></i>Chưa trả lời</span>
           </div>
 
-          <button id="submit-exam-button" class="submit-button" type="button">Nộp bài</button>
-        </aside>
-
-        <section class="question-panel">
-          <div id="question-content"></div>
-
-          <div class="question-actions">
-            <button id="previous-button" class="secondary-button" type="button">← Câu trước</button>
-            <button id="next-button" class="primary-button compact" type="button">Câu tiếp theo →</button>
+          <div class="autosave-card">
+            <span>Trạng thái bài làm</span>
+            <strong id="autosave-status">Đang chờ câu trả lời</strong>
           </div>
-        </section>
+
+          <button class="submit-button" type="button" data-submit-exam>Nộp bài</button>
+        </aside>
       </div>
+
+      <button id="floating-question-map-button" class="floating-question-map-button" type="button" aria-controls="question-map" aria-expanded="false">
+        <span id="floating-progress-text">0/28</span>
+        <small>Câu hỏi</small>
+      </button>
+      <div id="question-map-backdrop" class="question-map-backdrop" aria-hidden="true"></div>
     </section>
 
     <section id="result-screen" class="screen result-screen">
@@ -558,6 +588,7 @@
       <span class="modal-icon">!</span>
       <h2 id="modal-title">Nộp bài?</h2>
       <p id="modal-message"></p>
+      <div id="modal-question-summary" class="modal-question-summary"></div>
       <div class="modal-actions">
         <button class="secondary-button" type="button" data-close-modal>Tiếp tục làm</button>
         <button id="confirm-submit-button" class="submit-button compact" type="button">Nộp bài ngay</button>

@@ -2,6 +2,7 @@
   "use strict";
 
   const STORAGE_KEY = "anh_huan_physics_exam_results_v2";
+  const EXAM_DRAFT_PREFIX = "anh_huan_full_exam_draft_v1";
   const TF_SCORE = { 0: 0, 1: 0.1, 2: 0.25, 3: 0.5, 4: 1 };
   const REQUIRED_COUNTS = { mcq: 18, tf: 4, short: 6 };
 
@@ -24,7 +25,10 @@
     teacherUser: null,
     dashboardResults: [],
     teacherExams: [],
-    examDraft: null
+    examDraft: null,
+    reviewFlags: new Set(),
+    questionObserver: null,
+    autosaveTimer: null
   };
 
   const $ = (selector) => document.querySelector(selector);
@@ -112,10 +116,16 @@
   }
 
   function bindExamControls() {
-    $("#previous-button").addEventListener("click", () => navigateQuestion(-1));
-    $("#submit-exam-button").addEventListener("click", openSubmitModal);
-    $("#confirm-submit-button").addEventListener("click", () => submitExam(false));
+    $$('[data-submit-exam]').forEach((button) => button.addEventListener("click", openSubmitModal));
+    $("#confirm-submit-button")?.addEventListener("click", () => submitExam(false));
     $$('[data-close-modal]').forEach((element) => element.addEventListener("click", closeSubmitModal));
+    $("#mobile-question-map-button")?.addEventListener("click", openQuestionMap);
+    $("#floating-question-map-button")?.addEventListener("click", openQuestionMap);
+    $("#close-question-map-button")?.addEventListener("click", closeQuestionMap);
+    $("#question-map-backdrop")?.addEventListener("click", closeQuestionMap);
+    window.addEventListener("resize", () => {
+      if (window.innerWidth > 1000) closeQuestionMap();
+    });
   }
 
   function bindResultControls() {
@@ -785,6 +795,11 @@
       showStudentAuthScreen("Vui lòng đăng nhập tài khoản học sinh trước khi làm đề.");
       return;
     }
+
+    stopTimer();
+    stopQuestionObserver();
+    clearAutosaveTimer();
+
     state.candidate = { name, className };
     state.activeExam = exam;
     state.items = buildExamItems(exam.data);
@@ -793,18 +808,26 @@
     state.startedAt = Date.now();
     state.submitted = false;
     state.answers = createEmptyAnswers();
+    state.reviewFlags = new Set();
     state.latestResult = null;
+
+    restoreExamDraftIfAvailable(exam);
 
     $("#active-exam-code").textContent = exam.code;
     $("#active-exam-title").textContent = exam.title;
     $("#candidate-line").textContent = `${name} · Lớp ${className}`;
     $("#result-duration-limit").textContent = `trên ${exam.durationMinutes} phút`;
+
+    renderFullExam();
     renderQuestionNavigation();
-    renderQuestion();
     updateTimerDisplay();
     updateProgress();
     showScreen("exam");
+    startQuestionObserver();
     startTimer();
+    scheduleAutosave();
+
+    if (state.secondsLeft <= 0) submitExam(true);
   }
 
   function buildExamItems(data) {
@@ -820,6 +843,7 @@
     state.timerId = window.setInterval(() => {
       state.secondsLeft -= 1;
       updateTimerDisplay();
+      if (state.secondsLeft > 0 && state.secondsLeft % 10 === 0) saveExamDraft();
       if (state.secondsLeft <= 0) submitExam(true);
     }, 1000);
   }
@@ -834,15 +858,234 @@
     const seconds = Math.max(0, state.secondsLeft % 60);
     $("#timer").textContent = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
     const timerCard = $("#timer-card");
-    timerCard.classList.toggle("warning", state.secondsLeft <= 600 && state.secondsLeft > 300);
-    timerCard.classList.toggle("danger", state.secondsLeft <= 300);
+    timerCard?.classList.toggle("warning", state.secondsLeft <= 600 && state.secondsLeft > 300);
+    timerCard?.classList.toggle("danger", state.secondsLeft <= 300);
   }
 
-  function navigateQuestion(direction) {
-    state.currentIndex = Math.min(state.items.length - 1, Math.max(0, state.currentIndex + direction));
-    renderQuestion();
+  function renderFullExam() {
+    const container = $("#question-content");
+    if (!container) return;
+    if (!state.items.length) {
+      container.innerHTML = `<div class="empty-state"><strong>Đề chưa có câu hỏi</strong></div>`;
+      return;
+    }
+
+    const groups = [
+      {
+        part: 1,
+        title: "PHẦN I",
+        subtitle: "Câu trắc nghiệm nhiều phương án lựa chọn",
+        description: "Mỗi câu chỉ chọn một phương án đúng."
+      },
+      {
+        part: 2,
+        title: "PHẦN II",
+        subtitle: "Câu trắc nghiệm Đúng/Sai",
+        description: "Mỗi câu gồm bốn nhận định a), b), c), d)."
+      },
+      {
+        part: 3,
+        title: "PHẦN III",
+        subtitle: "Câu trắc nghiệm trả lời ngắn",
+        description: "Nhập kết quả cuối cùng, không nhập đơn vị vào ô trả lời."
+      }
+    ];
+
+    container.innerHTML = groups.map((group) => {
+      const items = state.items.filter((item) => item.part === group.part);
+      if (!items.length) return "";
+      return `
+        <section class="exam-part-section" data-exam-part="${group.part}">
+          <header class="exam-part-heading">
+            <div>
+              <span>${group.title}</span>
+              <h2>${group.subtitle}</h2>
+              <p>${group.description}</p>
+            </div>
+            <strong>${items.length} câu</strong>
+          </header>
+          <div class="exam-question-list">
+            ${items.map((item) => renderFullQuestion(item, state.items.indexOf(item))).join("")}
+          </div>
+        </section>`;
+    }).join("");
+
+    bindFullExamInputs();
+  }
+
+  function renderFullQuestion(item, globalIndex) {
+    const status = getItemStatus(item);
+    const marked = state.reviewFlags.has(globalIndex);
+    const question = item.question || {};
+    return `
+      <article id="question-${globalIndex}" class="exam-question-card ${status} ${marked ? "marked" : ""}" data-question-card data-question-index="${globalIndex}">
+        <div class="question-card-header">
+          <div>
+            <span class="question-number-badge">Câu ${item.number}</span>
+            <span class="question-topic">${escapeHtml(question.topic || "Vật lí")}</span>
+          </div>
+          <button class="review-flag-button ${marked ? "active" : ""}" type="button" data-review-index="${globalIndex}" aria-pressed="${marked}">
+            <span aria-hidden="true">${marked ? "★" : "☆"}</span>
+            ${marked ? "Đã đánh dấu" : "Đánh dấu xem lại"}
+          </button>
+        </div>
+        ${item.type === "mcq" ? renderFullMcq(item, globalIndex) : ""}
+        ${item.type === "tf" ? renderFullTrueFalse(item, globalIndex) : ""}
+        ${item.type === "short" ? renderFullShortAnswer(item, globalIndex) : ""}
+      </article>`;
+  }
+
+  function renderQuestionMedia(question) {
+    const imageUrl = question?.imageUrl || question?.image_url || question?.figureUrl || question?.mediaUrl || "";
+    if (!imageUrl) return "";
+    return `
+      <figure class="question-media">
+        <img src="${escapeHtml(String(imageUrl))}" alt="Hình minh họa cho câu hỏi" loading="lazy" />
+        ${question.imageCaption ? `<figcaption>${escapeHtml(question.imageCaption)}</figcaption>` : ""}
+      </figure>`;
+  }
+
+  function renderFullMcq(item, globalIndex) {
+    const selected = state.answers.mcq[item.question.id];
+    return `
+      <div class="question-body">
+        <div class="question-stem">${item.question.stem || ""}</div>
+        ${renderQuestionMedia(item.question)}
+        <div class="option-list">
+          ${(item.question.options || []).map((option, index) => `
+            <button class="option-button ${selected === index ? "selected" : ""}" type="button" data-mcq-index="${globalIndex}" data-mcq-option="${index}" aria-pressed="${selected === index}">
+              <span class="option-letter">${String.fromCharCode(65 + index)}</span><span>${option}</span>
+            </button>
+          `).join("")}
+        </div>
+      </div>`;
+  }
+
+  function renderFullTrueFalse(item, globalIndex) {
+    const selected = state.answers.tf[item.question.id] || {};
+    return `
+      <div class="question-body">
+        <div class="question-context">${item.question.context || ""}</div>
+        ${renderQuestionMedia(item.question)}
+        <div class="tf-list">
+          ${(item.question.statements || []).map((statement, index) => `
+            <div class="tf-row" data-tf-row="${index}">
+              <span class="tf-label">${String.fromCharCode(97 + index)})</span>
+              <span class="tf-text">${statement.text || ""}</span>
+              <button class="tf-choice true ${selected[index] === true ? "selected" : ""}" type="button" data-tf-question-index="${globalIndex}" data-tf-index="${index}" data-tf-value="true" aria-pressed="${selected[index] === true}">Đúng</button>
+              <button class="tf-choice false ${selected[index] === false ? "selected" : ""}" type="button" data-tf-question-index="${globalIndex}" data-tf-index="${index}" data-tf-value="false" aria-pressed="${selected[index] === false}">Sai</button>
+            </div>`).join("")}
+        </div>
+      </div>`;
+  }
+
+  function renderFullShortAnswer(item, globalIndex) {
+    const value = state.answers.short[item.question.id] ?? "";
+    return `
+      <div class="question-body">
+        <div class="question-stem">${item.question.stem || ""}</div>
+        ${renderQuestionMedia(item.question)}
+        <div class="short-answer-box">
+          <label for="short-answer-${globalIndex}">Nhập kết quả cuối cùng</label>
+          <div class="short-answer-row">
+            <input id="short-answer-${globalIndex}" data-short-index="${globalIndex}" inputmode="decimal" autocomplete="off" value="${escapeHtml(String(value))}" placeholder="Nhập một số" />
+            <span class="unit-badge">${escapeHtml(item.question.unit || "")}</span>
+          </div>
+          <p class="answer-note">Có thể dùng dấu phẩy hoặc dấu chấm cho phần thập phân. Không nhập đơn vị vào ô trả lời.</p>
+        </div>
+      </div>`;
+  }
+
+  function bindFullExamInputs() {
+    $$('[data-mcq-index]').forEach((button) => {
+      button.addEventListener("click", () => {
+        const itemIndex = Number(button.dataset.mcqIndex);
+        const item = state.items[itemIndex];
+        if (!item) return;
+        state.answers.mcq[item.question.id] = Number(button.dataset.mcqOption);
+        const card = $(`#question-${itemIndex}`);
+        card?.querySelectorAll('[data-mcq-index]').forEach((candidate) => {
+          const selected = candidate === button;
+          candidate.classList.toggle("selected", selected);
+          candidate.setAttribute("aria-pressed", String(selected));
+        });
+        handleAnswerChange(itemIndex);
+      });
+    });
+
+    $$('[data-tf-question-index]').forEach((button) => {
+      button.addEventListener("click", () => {
+        const itemIndex = Number(button.dataset.tfQuestionIndex);
+        const statementIndex = Number(button.dataset.tfIndex);
+        const item = state.items[itemIndex];
+        if (!item) return;
+        const questionAnswers = state.answers.tf[item.question.id] || {};
+        questionAnswers[statementIndex] = button.dataset.tfValue === "true";
+        state.answers.tf[item.question.id] = questionAnswers;
+        const row = button.closest("[data-tf-row]");
+        row?.querySelectorAll(".tf-choice").forEach((candidate) => {
+          const selected = candidate === button;
+          candidate.classList.toggle("selected", selected);
+          candidate.setAttribute("aria-pressed", String(selected));
+        });
+        handleAnswerChange(itemIndex);
+      });
+    });
+
+    $$('[data-short-index]').forEach((input) => {
+      input.addEventListener("input", () => {
+        const itemIndex = Number(input.dataset.shortIndex);
+        const item = state.items[itemIndex];
+        if (!item) return;
+        state.answers.short[item.question.id] = input.value.trim();
+        handleAnswerChange(itemIndex, false);
+      });
+      input.addEventListener("change", () => saveExamDraft());
+    });
+
+    $$('[data-review-index]').forEach((button) => {
+      button.addEventListener("click", () => {
+        const itemIndex = Number(button.dataset.reviewIndex);
+        if (state.reviewFlags.has(itemIndex)) state.reviewFlags.delete(itemIndex);
+        else state.reviewFlags.add(itemIndex);
+        const marked = state.reviewFlags.has(itemIndex);
+        button.classList.toggle("active", marked);
+        button.setAttribute("aria-pressed", String(marked));
+        button.innerHTML = `<span aria-hidden="true">${marked ? "★" : "☆"}</span>${marked ? "Đã đánh dấu" : "Đánh dấu xem lại"}`;
+        $(`#question-${itemIndex}`)?.classList.toggle("marked", marked);
+        renderQuestionNavigation();
+        saveExamDraft();
+      });
+    });
+  }
+
+  function handleAnswerChange(itemIndex, saveImmediately = true) {
+    updateQuestionCardStatus(itemIndex);
     renderQuestionNavigation();
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    updateProgress();
+    if (saveImmediately) saveExamDraft();
+    else scheduleAutosave();
+  }
+
+  function updateQuestionCardStatus(itemIndex) {
+    const item = state.items[itemIndex];
+    const card = $(`#question-${itemIndex}`);
+    if (!item || !card) return;
+    card.classList.remove("empty", "partial", "done");
+    card.classList.add(getItemStatus(item));
+  }
+
+  function getItemStatus(item) {
+    if (item.type === "mcq") return Number.isInteger(state.answers.mcq[item.question.id]) ? "done" : "empty";
+    if (item.type === "tf") {
+      const count = Object.keys(state.answers.tf[item.question.id] || {}).length;
+      return count === 4 ? "done" : count > 0 ? "partial" : "empty";
+    }
+    return String(state.answers.short[item.question.id] ?? "").trim() !== "" ? "done" : "empty";
+  }
+
+  function isItemAnswered(item) {
+    return getItemStatus(item) === "done";
   }
 
   function renderQuestionNavigation() {
@@ -852,152 +1095,212 @@
       { part: 3, title: "Phần III", items: state.items.filter((item) => item.part === 3) }
     ];
 
-    $("#question-navigation").innerHTML = groups.map((group) => `
+    const navigation = $("#question-navigation");
+    if (!navigation) return;
+    navigation.innerHTML = groups.map((group) => `
       <div class="nav-part">
         <div class="nav-part-title"><span>${group.title}</span><span>${group.items.length} câu</span></div>
         <div class="nav-buttons">
           ${group.items.map((item) => {
             const globalIndex = state.items.indexOf(item);
-            const classes = ["question-nav-button"];
-            if (isItemAnswered(item)) classes.push("done");
+            const status = getItemStatus(item);
+            const classes = ["question-nav-button", status];
             if (globalIndex === state.currentIndex) classes.push("current");
-            return `<button class="${classes.join(" ")}" type="button" data-question-index="${globalIndex}">${item.number}</button>`;
+            if (state.reviewFlags.has(globalIndex)) classes.push("marked");
+            return `<button class="${classes.join(" ")}" type="button" data-question-index="${globalIndex}" aria-label="${group.title}, câu ${item.number}">${item.number}</button>`;
           }).join("")}
         </div>
       </div>
     `).join("");
 
     $$('[data-question-index]').forEach((button) => {
-      button.addEventListener("click", () => {
-        state.currentIndex = Number(button.dataset.questionIndex);
-        renderQuestion();
-        renderQuestionNavigation();
-        window.scrollTo({ top: 0, behavior: "smooth" });
-      });
+      button.addEventListener("click", () => jumpToQuestion(Number(button.dataset.questionIndex)));
     });
     updateProgress();
   }
 
-  function renderQuestion() {
-    const item = state.items[state.currentIndex];
-    if (!item) {
-      $("#question-content").innerHTML = `<div class="empty-state"><strong>Đề chưa có câu hỏi</strong></div>`;
-      return;
-    }
-    const totalInPart = state.items.filter((candidate) => candidate.part === item.part).length;
-    let html = `
-      <div class="question-topline">
-        <span class="question-type">${typeLabel(item.type)}</span>
-        <span class="question-index">Câu ${item.number}/${totalInPart} · ${escapeHtml(item.question.topic || "Vật lí")}</span>
-      </div>
-    `;
-    if (item.type === "mcq") html += renderMcq(item);
-    if (item.type === "tf") html += renderTrueFalse(item);
-    if (item.type === "short") html += renderShortAnswer(item);
-
-    $("#question-content").innerHTML = html;
-    bindQuestionInputs(item);
-    $("#previous-button").disabled = state.currentIndex === 0;
-    $("#next-button").textContent = state.currentIndex === state.items.length - 1 ? "Kiểm tra và nộp bài" : "Câu tiếp theo →";
-    $("#next-button").onclick = state.currentIndex === state.items.length - 1 ? openSubmitModal : () => navigateQuestion(1);
+  function jumpToQuestion(itemIndex) {
+    const target = $(`#question-${itemIndex}`);
+    if (!target) return;
+    state.currentIndex = itemIndex;
+    renderQuestionNavigation();
+    closeQuestionMap();
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+    window.setTimeout(() => target.classList.add("jump-highlight"), 250);
+    window.setTimeout(() => target.classList.remove("jump-highlight"), 1200);
   }
 
-  function renderMcq(item) {
-    const selected = state.answers.mcq[item.question.id];
-    return `
-      <h2 class="question-stem">${item.question.stem}</h2>
-      <div class="option-list">
-        ${(item.question.options || []).map((option, index) => `
-          <button class="option-button ${selected === index ? "selected" : ""}" type="button" data-mcq-option="${index}">
-            <span class="option-letter">${String.fromCharCode(65 + index)}</span><span>${option}</span>
-          </button>
-        `).join("")}
-      </div>`;
+  function startQuestionObserver() {
+    stopQuestionObserver();
+    if (!("IntersectionObserver" in window)) return;
+    state.questionObserver = new IntersectionObserver((entries) => {
+      const visible = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (!visible) return;
+      const index = Number(visible.target.dataset.questionIndex);
+      if (!Number.isInteger(index) || index === state.currentIndex) return;
+      state.currentIndex = index;
+      $$('[data-question-card]').forEach((card) => card.classList.toggle("current-view", Number(card.dataset.questionIndex) === index));
+      renderQuestionNavigation();
+    }, { rootMargin: "-180px 0px -55% 0px", threshold: [0.05, 0.25, 0.5] });
+    $$('[data-question-card]').forEach((card) => state.questionObserver.observe(card));
   }
 
-  function renderTrueFalse(item) {
-    const selected = state.answers.tf[item.question.id] || {};
-    return `
-      <h2 class="question-stem">Xác định tính đúng hoặc sai của từng nhận định.</h2>
-      <div class="question-context">${item.question.context}</div>
-      <div class="tf-list">
-        ${(item.question.statements || []).map((statement, index) => `
-          <div class="tf-row">
-            <span class="tf-label">${String.fromCharCode(97 + index)})</span>
-            <span class="tf-text">${statement.text}</span>
-            <button class="tf-choice true ${selected[index] === true ? "selected" : ""}" type="button" data-tf-index="${index}" data-tf-value="true">Đúng</button>
-            <button class="tf-choice false ${selected[index] === false ? "selected" : ""}" type="button" data-tf-index="${index}" data-tf-value="false">Sai</button>
-          </div>`).join("")}
-      </div>`;
-  }
-
-  function renderShortAnswer(item) {
-    const value = state.answers.short[item.question.id] ?? "";
-    return `
-      <h2 class="question-stem">${item.question.stem}</h2>
-      <div class="short-answer-box">
-        <label for="short-answer-input">Nhập kết quả cuối cùng</label>
-        <div class="short-answer-row">
-          <input id="short-answer-input" inputmode="decimal" autocomplete="off" value="${escapeHtml(String(value))}" placeholder="Nhập một số" />
-          <span class="unit-badge">${escapeHtml(item.question.unit || "")}</span>
-        </div>
-        <p class="answer-note">Có thể dùng dấu phẩy hoặc dấu chấm cho phần thập phân. Không nhập đơn vị vào ô trả lời.</p>
-      </div>`;
-  }
-
-  function bindQuestionInputs(item) {
-    if (item.type === "mcq") {
-      $$('[data-mcq-option]').forEach((button) => {
-        button.addEventListener("click", () => {
-          state.answers.mcq[item.question.id] = Number(button.dataset.mcqOption);
-          renderQuestion();
-          renderQuestionNavigation();
-        });
-      });
-    }
-    if (item.type === "tf") {
-      $$('[data-tf-index]').forEach((button) => {
-        button.addEventListener("click", () => {
-          const questionAnswers = state.answers.tf[item.question.id] || {};
-          questionAnswers[Number(button.dataset.tfIndex)] = button.dataset.tfValue === "true";
-          state.answers.tf[item.question.id] = questionAnswers;
-          renderQuestion();
-          renderQuestionNavigation();
-        });
-      });
-    }
-    if (item.type === "short") {
-      const input = $("#short-answer-input");
-      input.addEventListener("input", () => {
-        state.answers.short[item.question.id] = input.value.trim();
-        renderQuestionNavigation();
-      });
-    }
-  }
-
-  function typeLabel(type) {
-    return type === "mcq" ? "Phần I · Nhiều lựa chọn" : type === "tf" ? "Phần II · Đúng/Sai" : "Phần III · Trả lời ngắn";
-  }
-
-  function isItemAnswered(item) {
-    if (item.type === "mcq") return Number.isInteger(state.answers.mcq[item.question.id]);
-    if (item.type === "tf") return Object.keys(state.answers.tf[item.question.id] || {}).length === 4;
-    return String(state.answers.short[item.question.id] ?? "").trim() !== "";
+  function stopQuestionObserver() {
+    state.questionObserver?.disconnect();
+    state.questionObserver = null;
   }
 
   function updateProgress() {
     const answered = state.items.filter(isItemAnswered).length;
-    $("#progress-text").textContent = `${answered}/${state.items.length}`;
-    $("#progress-bar").style.width = `${state.items.length ? (answered / state.items.length) * 100 : 0}%`;
+    const total = state.items.length;
+    $$('[data-progress-text]').forEach((element) => { element.textContent = `${answered}/${total}`; });
+    if ($("#floating-progress-text")) $("#floating-progress-text").textContent = `${answered}/${total}`;
+    if ($("#progress-bar")) $("#progress-bar").style.width = `${total ? (answered / total) * 100 : 0}%`;
+  }
+
+  function openQuestionMap() {
+    const map = $("#question-map");
+    const backdrop = $("#question-map-backdrop");
+    map?.classList.add("mobile-open");
+    map?.setAttribute("aria-hidden", "false");
+    backdrop?.classList.add("open");
+    backdrop?.setAttribute("aria-hidden", "false");
+    $("#mobile-question-map-button")?.setAttribute("aria-expanded", "true");
+    $("#floating-question-map-button")?.setAttribute("aria-expanded", "true");
+    document.body.classList.add("question-map-is-open");
+  }
+
+  function closeQuestionMap() {
+    const map = $("#question-map");
+    const backdrop = $("#question-map-backdrop");
+    map?.classList.remove("mobile-open");
+    backdrop?.classList.remove("open");
+    backdrop?.setAttribute("aria-hidden", "true");
+    $("#mobile-question-map-button")?.setAttribute("aria-expanded", "false");
+    $("#floating-question-map-button")?.setAttribute("aria-expanded", "false");
+    document.body.classList.remove("question-map-is-open");
+  }
+
+  function getExamDraftKey(exam = state.activeExam) {
+    const userId = state.studentUser?.id || "guest";
+    const examId = exam?.id || exam?.code || "exam";
+    return `${EXAM_DRAFT_PREFIX}:${userId}:${examId}`;
+  }
+
+  function restoreExamDraftIfAvailable(exam) {
+    try {
+      const raw = localStorage.getItem(getExamDraftKey(exam));
+      if (!raw) return;
+      const draft = JSON.parse(raw);
+      if (!draft?.answers || draft.submitted) return;
+      const shouldResume = window.confirm("Bạn có một bài làm chưa hoàn thành ở đề này. Nhấn OK để tiếp tục, hoặc Hủy để làm lại từ đầu.");
+      if (!shouldResume) {
+        localStorage.removeItem(getExamDraftKey(exam));
+        return;
+      }
+      state.answers = {
+        mcq: draft.answers.mcq || {},
+        tf: draft.answers.tf || {},
+        short: draft.answers.short || {}
+      };
+      state.reviewFlags = new Set(Array.isArray(draft.reviewFlags) ? draft.reviewFlags : []);
+      const elapsedSinceSave = draft.savedAt ? Math.max(0, Math.floor((Date.now() - draft.savedAt) / 1000)) : 0;
+      state.secondsLeft = Math.max(0, Number(draft.secondsLeft ?? state.secondsLeft) - elapsedSinceSave);
+      state.startedAt = Number(draft.startedAt || Date.now());
+      showToast("Đã khôi phục bài làm đang dở.");
+    } catch (error) {
+      console.error("Không thể khôi phục bài làm:", error);
+      localStorage.removeItem(getExamDraftKey(exam));
+    }
+  }
+
+  function saveExamDraft() {
+    if (!state.activeExam || state.submitted) return;
+    try {
+      const draft = {
+        examId: state.activeExam.id,
+        examCode: state.activeExam.code,
+        answers: state.answers,
+        reviewFlags: [...state.reviewFlags],
+        secondsLeft: state.secondsLeft,
+        startedAt: state.startedAt,
+        savedAt: Date.now(),
+        submitted: false
+      };
+      localStorage.setItem(getExamDraftKey(), JSON.stringify(draft));
+      const status = $("#autosave-status");
+      if (status) status.textContent = `Đã lưu lúc ${new Date().toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
+    } catch (error) {
+      console.error("Không thể lưu bài tạm:", error);
+      if ($("#autosave-status")) $("#autosave-status").textContent = "Chưa lưu được trên thiết bị";
+    }
+  }
+
+  function scheduleAutosave() {
+    clearAutosaveTimer();
+    state.autosaveTimer = window.setTimeout(() => {
+      saveExamDraft();
+      state.autosaveTimer = null;
+    }, 500);
+  }
+
+  function clearAutosaveTimer() {
+    if (state.autosaveTimer) window.clearTimeout(state.autosaveTimer);
+    state.autosaveTimer = null;
+  }
+
+  function clearExamDraft() {
+    try { localStorage.removeItem(getExamDraftKey()); } catch (error) { console.error(error); }
   }
 
   function openSubmitModal() {
-    const unanswered = state.items.filter((item) => !isItemAnswered(item)).length;
-    $("#modal-message").textContent = unanswered
-      ? `Bạn còn ${unanswered} câu chưa trả lời. Các câu bỏ trống sẽ không được tính điểm.`
+    const unansweredIndexes = state.items
+      .map((item, index) => ({ item, index }))
+      .filter(({ item }) => !isItemAnswered(item));
+    const markedIndexes = [...state.reviewFlags].sort((a, b) => a - b);
+    const answered = state.items.length - unansweredIndexes.length;
+
+    $("#modal-message").textContent = unansweredIndexes.length
+      ? `Bạn đã hoàn thành ${answered}/${state.items.length} câu. Hãy kiểm tra các câu còn thiếu trước khi nộp.`
       : `Bạn đã trả lời đầy đủ ${state.items.length} câu. Hãy kiểm tra lần cuối trước khi nộp.`;
+
+    const summary = $("#modal-question-summary");
+    if (summary) {
+      const buildButtons = (indexes, emptyText) => indexes.length
+        ? `<div class="modal-jump-list">${indexes.map((index) => {
+            const item = state.items[index];
+            return `<button type="button" data-modal-jump-index="${index}">${partShortLabel(item.part)} ${item.number}</button>`;
+          }).join("")}</div>`
+        : `<p class="modal-empty-note">${emptyText}</p>`;
+      summary.innerHTML = `
+        <div class="modal-summary-group">
+          <strong>Chưa hoàn thành (${unansweredIndexes.length})</strong>
+          ${buildButtons(unansweredIndexes.map(({ index }) => index), "Không còn câu bỏ trống.")}
+        </div>
+        <div class="modal-summary-group">
+          <strong>Đã đánh dấu xem lại (${markedIndexes.length})</strong>
+          ${buildButtons(markedIndexes, "Không có câu nào được đánh dấu.")}
+        </div>`;
+      $$('[data-modal-jump-index]').forEach((button) => {
+        button.addEventListener("click", () => {
+          closeSubmitModal();
+          jumpToQuestion(Number(button.dataset.modalJumpIndex));
+        });
+      });
+    }
+
     $("#confirm-modal").classList.add("open");
     $("#confirm-modal").setAttribute("aria-hidden", "false");
+  }
+
+  function partShortLabel(part) {
+    return part === 1 ? "Phần I · Câu" : part === 2 ? "Phần II · Câu" : "Phần III · Câu";
+  }
+
+  function typeLabel(type) {
+    return type === "mcq" ? "Phần I · Nhiều lựa chọn" : type === "tf" ? "Phần II · Đúng/Sai" : "Phần III · Trả lời ngắn";
   }
 
   function closeSubmitModal() {
@@ -1009,6 +1312,10 @@
     if (state.submitted || !state.activeExam) return;
     state.submitted = true;
     stopTimer();
+    stopQuestionObserver();
+    clearAutosaveTimer();
+    clearExamDraft();
+    closeQuestionMap();
     closeSubmitModal();
 
     const scores = calculateScores();
