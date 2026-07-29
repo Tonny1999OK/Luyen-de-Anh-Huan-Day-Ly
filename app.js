@@ -28,6 +28,10 @@
     examDraft: null,
     reviewFlags: new Set(),
     questionObserver: null,
+    questionScrollHandler: null,
+    questionScrollFrame: null,
+    questionJumpTimer: null,
+    observerLockUntil: 0,
     autosaveTimer: null
   };
 
@@ -1290,7 +1294,7 @@
         button.setAttribute("aria-pressed", String(marked));
         button.innerHTML = `<span aria-hidden="true">${marked ? "★" : "☆"}</span>${marked ? "Đã đánh dấu" : "Đánh dấu xem lại"}`;
         $(`#question-${itemIndex}`)?.classList.toggle("marked", marked);
-        renderQuestionNavigation();
+        updateQuestionNavigationState();
         saveExamDraft();
       });
     });
@@ -1298,7 +1302,7 @@
 
   function handleAnswerChange(itemIndex, saveImmediately = true) {
     updateQuestionCardStatus(itemIndex);
-    renderQuestionNavigation();
+    updateQuestionNavigationState();
     updateProgress();
     if (saveImmediately) saveExamDraft();
     else scheduleAutosave();
@@ -1334,59 +1338,184 @@
 
     const navigation = $("#question-navigation");
     if (!navigation) return;
-    navigation.innerHTML = groups.map((group) => `
-      <div class="nav-part">
-        <div class="nav-part-title"><span>${group.title}</span><span>${group.items.length} câu</span></div>
-        <div class="nav-buttons">
-          ${group.items.map((item) => {
-            const globalIndex = state.items.indexOf(item);
-            const status = getItemStatus(item);
-            const classes = ["question-nav-button", status];
-            if (globalIndex === state.currentIndex) classes.push("current");
-            if (state.reviewFlags.has(globalIndex)) classes.push("marked");
-            return `<button class="${classes.join(" ")}" type="button" data-question-index="${globalIndex}" aria-label="${group.title}, câu ${item.number}">${item.number}</button>`;
-          }).join("")}
-        </div>
-      </div>
-    `).join("");
 
-    $$('[data-question-index]').forEach((button) => {
-      button.addEventListener("click", () => jumpToQuestion(Number(button.dataset.questionIndex)));
-    });
+    const structureKey = state.items
+      .map((item, index) => `${index}:${item.part}:${item.number}:${item.question?.id || ""}`)
+      .join("|");
+
+    if (navigation.dataset.structureKey !== structureKey) {
+      navigation.innerHTML = groups.map((group) => `
+        <div class="nav-part" data-nav-part="${group.part}">
+          <div class="nav-part-title">
+            <span>${group.title}</span>
+            <span>${group.items.length} câu</span>
+          </div>
+          <div class="nav-buttons">
+            ${group.items.map((item) => {
+              const globalIndex = state.items.indexOf(item);
+              return `<button class="question-nav-button empty" type="button" data-question-index="${globalIndex}" aria-label="${group.title}, câu ${item.number}">${item.number}</button>`;
+            }).join("")}
+          </div>
+        </div>
+      `).join("");
+      navigation.dataset.structureKey = structureKey;
+    }
+
+    if (navigation.dataset.clickBound !== "true") {
+      navigation.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-question-index]");
+        if (!button || !navigation.contains(button)) return;
+        jumpToQuestion(Number(button.dataset.questionIndex));
+      });
+      navigation.dataset.clickBound = "true";
+    }
+
+    updateQuestionNavigationState();
     updateProgress();
+  }
+
+  function updateQuestionNavigationState() {
+    const navigation = $("#question-navigation");
+    if (!navigation) return;
+
+    navigation.querySelectorAll("[data-question-index]").forEach((button) => {
+      const itemIndex = Number(button.dataset.questionIndex);
+      const item = state.items[itemIndex];
+      if (!item) return;
+
+      const status = getItemStatus(item);
+      const isCurrent = itemIndex === state.currentIndex;
+      const isMarked = state.reviewFlags.has(itemIndex);
+
+      button.classList.remove("empty", "partial", "done", "current", "marked");
+      button.classList.add(status);
+      button.classList.toggle("current", isCurrent);
+      button.classList.toggle("marked", isMarked);
+      button.setAttribute("aria-current", isCurrent ? "true" : "false");
+    });
+  }
+
+  function setCurrentQuestion(itemIndex) {
+    if (!Number.isInteger(itemIndex) || !state.items[itemIndex]) return;
+    state.currentIndex = itemIndex;
+    $$('[data-question-card]').forEach((card) => {
+      card.classList.toggle(
+        "current-view",
+        Number(card.dataset.questionIndex) === itemIndex
+      );
+    });
+    updateQuestionNavigationState();
+  }
+
+  function getQuestionScrollOffset() {
+    const commandBar = $("#exam-command-bar");
+    const topbar = $(".topbar");
+    const commandBottom = commandBar?.getBoundingClientRect().bottom || 0;
+    const topbarBottom = topbar?.getBoundingClientRect().bottom || 0;
+    return Math.max(commandBottom, topbarBottom, 92) + 16;
   }
 
   function jumpToQuestion(itemIndex) {
     const target = $(`#question-${itemIndex}`);
-    if (!target) return;
-    state.currentIndex = itemIndex;
-    renderQuestionNavigation();
+    if (!target || !state.items[itemIndex]) return;
+
+    window.clearTimeout(state.questionJumpTimer);
+    state.observerLockUntil = Date.now() + 900;
+    setCurrentQuestion(itemIndex);
     closeQuestionMap();
-    target.scrollIntoView({ behavior: "smooth", block: "start" });
-    window.setTimeout(() => target.classList.add("jump-highlight"), 250);
+
+    const targetTop = Math.max(
+      0,
+      window.scrollY + target.getBoundingClientRect().top - getQuestionScrollOffset()
+    );
+
+    window.scrollTo({
+      top: targetTop,
+      behavior: "smooth"
+    });
+
+    target.classList.remove("jump-highlight");
+    window.requestAnimationFrame(() => target.classList.add("jump-highlight"));
     window.setTimeout(() => target.classList.remove("jump-highlight"), 1200);
+
+    state.questionJumpTimer = window.setTimeout(() => {
+      state.observerLockUntil = 0;
+      syncCurrentQuestionFromViewport();
+    }, 920);
+  }
+
+  function syncCurrentQuestionFromViewport() {
+    if (Date.now() < state.observerLockUntil) return;
+
+    const cards = $$('[data-question-card]');
+    if (!cards.length) return;
+
+    const anchorY = getQuestionScrollOffset() + Math.min(130, window.innerHeight * 0.12);
+    let bestCard = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+
+    cards.forEach((card) => {
+      const rect = card.getBoundingClientRect();
+      if (rect.bottom <= getQuestionScrollOffset() || rect.top >= window.innerHeight) return;
+
+      if (rect.top <= anchorY && rect.bottom >= anchorY) {
+        bestCard = card;
+        bestDistance = -1;
+        return;
+      }
+
+      if (bestDistance === -1) return;
+      const distance = Math.min(
+        Math.abs(rect.top - anchorY),
+        Math.abs(rect.bottom - anchorY)
+      );
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestCard = card;
+      }
+    });
+
+    if (!bestCard) return;
+    const index = Number(bestCard.dataset.questionIndex);
+    if (!Number.isInteger(index) || index === state.currentIndex) return;
+    setCurrentQuestion(index);
   }
 
   function startQuestionObserver() {
     stopQuestionObserver();
-    if (!("IntersectionObserver" in window)) return;
-    state.questionObserver = new IntersectionObserver((entries) => {
-      const visible = entries
-        .filter((entry) => entry.isIntersecting)
-        .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
-      if (!visible) return;
-      const index = Number(visible.target.dataset.questionIndex);
-      if (!Number.isInteger(index) || index === state.currentIndex) return;
-      state.currentIndex = index;
-      $$('[data-question-card]').forEach((card) => card.classList.toggle("current-view", Number(card.dataset.questionIndex) === index));
-      renderQuestionNavigation();
-    }, { rootMargin: "-180px 0px -55% 0px", threshold: [0.05, 0.25, 0.5] });
-    $$('[data-question-card]').forEach((card) => state.questionObserver.observe(card));
+
+    const scheduleSync = () => {
+      if (state.questionScrollFrame) return;
+      state.questionScrollFrame = window.requestAnimationFrame(() => {
+        state.questionScrollFrame = null;
+        syncCurrentQuestionFromViewport();
+      });
+    };
+
+    state.questionScrollHandler = scheduleSync;
+    window.addEventListener("scroll", scheduleSync, { passive: true });
+    window.addEventListener("resize", scheduleSync, { passive: true });
+    scheduleSync();
   }
 
   function stopQuestionObserver() {
     state.questionObserver?.disconnect();
     state.questionObserver = null;
+
+    if (state.questionScrollHandler) {
+      window.removeEventListener("scroll", state.questionScrollHandler);
+      window.removeEventListener("resize", state.questionScrollHandler);
+      state.questionScrollHandler = null;
+    }
+
+    if (state.questionScrollFrame) {
+      window.cancelAnimationFrame(state.questionScrollFrame);
+      state.questionScrollFrame = null;
+    }
+
+    window.clearTimeout(state.questionJumpTimer);
+    state.questionJumpTimer = null;
+    state.observerLockUntil = 0;
   }
 
   function updateProgress() {
@@ -1407,6 +1536,31 @@
     $("#mobile-question-map-button")?.setAttribute("aria-expanded", "true");
     $("#floating-question-map-button")?.setAttribute("aria-expanded", "true");
     document.body.classList.add("question-map-is-open");
+    window.requestAnimationFrame(() => scrollCurrentNavigationButtonIntoView());
+  }
+
+  function scrollCurrentNavigationButtonIntoView() {
+    const map = $("#question-map");
+    const button = $(`[data-question-index="${state.currentIndex}"]`);
+    if (!map || !button) return;
+
+    const mapRect = map.getBoundingClientRect();
+    const buttonRect = button.getBoundingClientRect();
+    const safeTop = mapRect.top + 84;
+    const safeBottom = mapRect.bottom - 88;
+
+    if (buttonRect.top >= safeTop && buttonRect.bottom <= safeBottom) return;
+
+    const targetTop = map.scrollTop
+      + buttonRect.top
+      - mapRect.top
+      - map.clientHeight / 2
+      + buttonRect.height / 2;
+
+    map.scrollTo({
+      top: Math.max(0, targetTop),
+      behavior: "auto"
+    });
   }
 
   function closeQuestionMap() {
