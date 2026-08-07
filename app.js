@@ -882,10 +882,83 @@
     timerCard?.classList.toggle("danger", state.secondsLeft <= 300);
   }
 
+  function normalizeVisualFingerprintValue(value) {
+    return normalizeLatexEscapes(String(value ?? ""))
+      .replace(/\\\(|\\\)|\\\[|\\\]/g, "")
+      .replace(/\\,/g, "")
+      .replace(/\s+/g, "")
+      .toLowerCase()
+      .trim();
+  }
+
+  function getVisualSignature(visual) {
+    if (!visual || typeof visual !== "object") return "";
+
+    const type = String(visual.type || "").trim().toLowerCase();
+
+    if (type === "table") {
+      const headers = Array.isArray(visual.headers) ? visual.headers : [];
+      const rows = Array.isArray(visual.rows) ? visual.rows.filter(Array.isArray) : [];
+
+      // Dùng tập ô đã sắp xếp thay vì vị trí hàng/cột.
+      // Nhờ vậy cùng một bảng dù AI đảo hàng <-> cột vẫn được nhận ra là trùng.
+      const cells = [
+        ...headers,
+        ...rows.flat()
+      ]
+        .map(normalizeVisualFingerprintValue)
+        .filter(Boolean)
+        .sort();
+
+      return cells.length ? `table:${cells.length}:${cells.join("|")}` : "";
+    }
+
+    if (type === "chart") {
+      return JSON.stringify({
+        type: "chart",
+        chartType: String(visual.chartType || "").toLowerCase(),
+        labels: Array.isArray(visual.labels) ? visual.labels : [],
+        datasets: Array.isArray(visual.datasets) ? visual.datasets : []
+      })
+        .toLowerCase()
+        .replace(/\s+/g, "");
+    }
+
+    return "";
+  }
+
+  function collectPreferredVisualSignatures(items) {
+    const signatures = new Set();
+    const passageIds = new Set();
+
+    const addVisuals = (visuals) => {
+      if (!Array.isArray(visuals)) return;
+      visuals.forEach((visual) => {
+        const signature = getVisualSignature(visual);
+        if (signature) signatures.add(signature);
+      });
+    };
+
+    (items || []).forEach((item) => {
+      addVisuals(item?.question?.visuals);
+      const passageId = String(item?.question?.passageId || "").trim();
+      if (passageId) passageIds.add(passageId);
+    });
+
+    (state.activeExam?.data?.passages || []).forEach((passage) => {
+      if (!passageIds.has(String(passage?.id || ""))) return;
+      addVisuals(passage?.visuals);
+    });
+
+    return signatures;
+  }
+
   function renderFullExam() {
     destroyPhysicsCharts();
+
     const container = $("#question-content");
     if (!container) return;
+
     if (!state.items.length) {
       container.innerHTML = `<div class="empty-state"><strong>Đề chưa có câu hỏi</strong></div>`;
       return;
@@ -915,6 +988,7 @@
     container.innerHTML = groups.map((group) => {
       const items = state.items.filter((item) => item.part === group.part);
       if (!items.length) return "";
+
       return `
         <section class="exam-part-section" data-exam-part="${group.part}">
           <header class="exam-part-heading">
@@ -925,6 +999,7 @@
             </div>
             <strong>${items.length} câu</strong>
           </header>
+
           <div class="exam-question-list">
             ${renderQuestionGroupWithPassages(items)}
           </div>
@@ -932,6 +1007,7 @@
     }).join("");
 
     bindFullExamInputs();
+
     window.requestAnimationFrame(() => {
       renderPhysicsCharts();
       renderMathContent(container);
@@ -940,45 +1016,100 @@
 
   function renderQuestionGroupWithPassages(items) {
     const renderedPassages = new Set();
+    const renderedVisuals = new Set();
+
+    // Những bảng/đồ thị có cấu trúc luôn được ưu tiên hơn phiên bản bảng
+    // mà AI chép lại bằng dấu | trong stem/context/passage.
+    const preferredVisualSignatures = collectPreferredVisualSignatures(items);
+
     return items.map((item) => {
       const globalIndex = state.items.indexOf(item);
       const passageId = String(item.question?.passageId || "").trim();
       let passageHtml = "";
+
       if (passageId && !renderedPassages.has(passageId)) {
-        const passage = (state.activeExam?.data?.passages || []).find((entry) => String(entry.id) === passageId);
+        const passage = (state.activeExam?.data?.passages || [])
+          .find((entry) => String(entry.id) === passageId);
+
         if (passage) {
           renderedPassages.add(passageId);
-          passageHtml = renderSharedPassage(passage);
+          passageHtml = renderSharedPassage(
+            passage,
+            renderedVisuals,
+            preferredVisualSignatures
+          );
         }
       }
-      return `${passageHtml}${renderFullQuestion(item, globalIndex)}`;
+
+      return `${passageHtml}${renderFullQuestion(
+        item,
+        globalIndex,
+        renderedVisuals,
+        preferredVisualSignatures
+      )}`;
     }).join("");
   }
 
-  function renderSharedPassage(passage) {
-    const imageUrl = passage?.imageUrl || passage?.image_url || passage?.figureUrl || "";
+  function renderSharedPassage(
+    passage,
+    renderedVisuals = new Set(),
+    preferredVisualSignatures = new Set()
+  ) {
+    const imageUrl =
+      passage?.imageUrl ||
+      passage?.image_url ||
+      passage?.figureUrl ||
+      "";
+
     const ownerKey = `passage-${String(passage.id || "")}`;
+
     return `
       <aside id="passage-${escapeHtml(String(passage.id || ""))}" class="shared-passage-block">
         <div class="shared-passage-heading">
           <span>DỮ KIỆN DÙNG CHUNG</span>
           <strong>${escapeHtml(passage.title || "Đọc đoạn dữ kiện sau")}</strong>
         </div>
-        <div class="shared-passage-content">${renderRichContent(passage.content)}</div>
-        ${renderPhysicsVisuals(passage.visuals, ownerKey)}
-        ${imageUrl ? `<figure class="question-media"><img src="${escapeHtml(String(imageUrl))}" alt="Hình minh họa cho đoạn dữ kiện" loading="lazy" /></figure>` : ""}
+
+        <div class="shared-passage-content">
+          ${renderRichContent(passage.content, preferredVisualSignatures)}
+        </div>
+
+        ${renderPhysicsVisuals(
+          passage.visuals,
+          ownerKey,
+          renderedVisuals
+        )}
+
+        ${imageUrl
+          ? `<figure class="question-media"><img src="${escapeHtml(String(imageUrl))}" alt="Hình minh họa cho đoạn dữ kiện" loading="lazy" /></figure>`
+          : ""}
       </aside>`;
   }
 
-  function renderQuestionContext(question) {
+  function renderQuestionContext(
+    question,
+    preferredVisualSignatures = new Set()
+  ) {
     const context = String(question?.context || "").trim();
-    return context ? `<div class="question-context question-own-context">${renderRichContent(context)}</div>` : "";
+
+    return context
+      ? `<div class="question-context question-own-context">${renderRichContent(
+          context,
+          preferredVisualSignatures
+        )}</div>`
+      : "";
   }
 
-  function renderFullQuestion(item, globalIndex) {
+  function renderFullQuestion(
+    item,
+    globalIndex,
+    renderedVisuals = new Set(),
+    preferredVisualSignatures = new Set()
+  ) {
     const status = getItemStatus(item);
     const marked = state.reviewFlags.has(globalIndex);
     const question = item.question || {};
+
     return `
       <article id="question-${globalIndex}" class="exam-question-card ${status} ${marked ? "marked" : ""}" data-question-card data-question-index="${globalIndex}">
         <div class="question-card-header">
@@ -986,14 +1117,24 @@
             <span class="question-number-badge">Câu ${item.number}</span>
             <span class="question-topic">${escapeHtml(question.topic || "Vật lí")}</span>
           </div>
+
           <button class="review-flag-button ${marked ? "active" : ""}" type="button" data-review-index="${globalIndex}" aria-pressed="${marked}">
             <span aria-hidden="true">${marked ? "★" : "☆"}</span>
             ${marked ? "Đã đánh dấu" : "Đánh dấu xem lại"}
           </button>
         </div>
-        ${item.type === "mcq" ? renderFullMcq(item, globalIndex) : ""}
-        ${item.type === "tf" ? renderFullTrueFalse(item, globalIndex) : ""}
-        ${item.type === "short" ? renderFullShortAnswer(item, globalIndex) : ""}
+
+        ${item.type === "mcq"
+          ? renderFullMcq(item, globalIndex, renderedVisuals, preferredVisualSignatures)
+          : ""}
+
+        ${item.type === "tf"
+          ? renderFullTrueFalse(item, globalIndex, renderedVisuals, preferredVisualSignatures)
+          : ""}
+
+        ${item.type === "short"
+          ? renderFullShortAnswer(item, globalIndex, renderedVisuals, preferredVisualSignatures)
+          : ""}
       </article>`;
   }
 
@@ -1061,16 +1202,37 @@
       </section>`;
   }
 
-  function renderPhysicsVisuals(visuals, ownerKey) {
+  function renderPhysicsVisuals(
+    visuals,
+    ownerKey,
+    renderedVisuals = new Set()
+  ) {
     if (!Array.isArray(visuals)) return "";
 
     return visuals.map((visual, index) => {
-      const type = String(visual?.type || visual?.kind || "").toLowerCase();
-      if (type === "table") return renderPhysicsTable(visual);
-      if (["chart", "line", "bar", "scatter", "piecewise", "coordinate"].includes(type)) {
-        const chart = type === "chart" ? visual : { ...visual, chartType: visual.chartType || type };
-        return renderPhysicsChartPlaceholder(chart, ownerKey, index);
+      const type = String(visual?.type || "").trim().toLowerCase();
+      const signature = getVisualSignature(visual);
+
+      if (signature && renderedVisuals.has(signature)) {
+        return "";
       }
+
+      if (signature) {
+        renderedVisuals.add(signature);
+      }
+
+      if (type === "table") {
+        return renderPhysicsTable(visual);
+      }
+
+      if (type === "chart") {
+        return renderPhysicsChartPlaceholder(
+          visual,
+          ownerKey,
+          index
+        );
+      }
+
       return "";
     }).join("");
   }
@@ -1184,17 +1346,45 @@
       </figure>`;
   }
 
-  function renderFullMcq(item, globalIndex) {
+  function renderFullMcq(
+    item,
+    globalIndex,
+    renderedVisuals = new Set(),
+    preferredVisualSignatures = new Set()
+  ) {
     const selected = state.answers.mcq[item.question.id];
+
     return `
       <div class="question-body">
-        ${renderQuestionContext(item.question)}
-        <div class="question-stem">${renderRichContent(item.question.stem)}</div>
-        ${renderPhysicsVisuals(item.question.visuals, `question-${globalIndex}`)}
+        ${renderQuestionContext(
+          item.question,
+          preferredVisualSignatures
+        )}
+
+        <div class="question-stem">
+          ${renderRichContent(
+            item.question.stem,
+            preferredVisualSignatures
+          )}
+        </div>
+
+        ${renderPhysicsVisuals(
+          item.question.visuals,
+          `question-${globalIndex}`,
+          renderedVisuals
+        )}
+
         ${renderQuestionMedia(item.question)}
+
         <div class="option-list">
           ${(item.question.options || []).map((option, index) => `
-            <button class="option-button ${selected === index ? "selected" : ""}" type="button" data-mcq-index="${globalIndex}" data-mcq-option="${index}" aria-pressed="${selected === index}">
+            <button
+              class="option-button ${selected === index ? "selected" : ""}"
+              type="button"
+              data-mcq-index="${globalIndex}"
+              data-mcq-option="${index}"
+              aria-pressed="${selected === index}"
+            >
               <span class="option-letter">${String.fromCharCode(65 + index)}</span>
               <span class="option-text">${renderLongText(cleanupOptionText(option, index))}</span>
             </button>
@@ -1203,40 +1393,97 @@
       </div>`;
   }
 
-  function renderFullTrueFalse(item, globalIndex) {
+  function renderFullTrueFalse(
+    item,
+    globalIndex,
+    renderedVisuals = new Set(),
+    preferredVisualSignatures = new Set()
+  ) {
     const selected = state.answers.tf[item.question.id] || {};
+
     return `
       <div class="question-body">
-        ${renderQuestionContext(item.question)}
-        ${renderPhysicsVisuals(item.question.visuals, `question-${globalIndex}`)}
+        ${renderQuestionContext(
+          item.question,
+          preferredVisualSignatures
+        )}
+
+        ${renderPhysicsVisuals(
+          item.question.visuals,
+          `question-${globalIndex}`,
+          renderedVisuals
+        )}
+
         ${renderQuestionMedia(item.question)}
+
         <div class="tf-list">
           ${(item.question.statements || []).map((statement, index) => `
             <div class="tf-row" data-tf-row="${index}">
               <span class="tf-label">${String.fromCharCode(97 + index)})</span>
               <span class="tf-text">${renderLongText(cleanupInlineDisplayText(statement.text))}</span>
-              <button class="tf-choice true ${selected[index] === true ? "selected" : ""}" type="button" data-tf-question-index="${globalIndex}" data-tf-index="${index}" data-tf-value="true" aria-pressed="${selected[index] === true}">Đúng</button>
-              <button class="tf-choice false ${selected[index] === false ? "selected" : ""}" type="button" data-tf-question-index="${globalIndex}" data-tf-index="${index}" data-tf-value="false" aria-pressed="${selected[index] === false}">Sai</button>
-            </div>`).join("")}
+
+              <button class="tf-choice true ${selected[index] === true ? "selected" : ""}" type="button"
+                data-tf-question-index="${globalIndex}" data-tf-index="${index}" data-tf-value="true"
+                aria-pressed="${selected[index] === true}">Đúng</button>
+
+              <button class="tf-choice false ${selected[index] === false ? "selected" : ""}" type="button"
+                data-tf-question-index="${globalIndex}" data-tf-index="${index}" data-tf-value="false"
+                aria-pressed="${selected[index] === false}">Sai</button>
+            </div>
+          `).join("")}
         </div>
       </div>`;
   }
 
-  function renderFullShortAnswer(item, globalIndex) {
+  function renderFullShortAnswer(
+    item,
+    globalIndex,
+    renderedVisuals = new Set(),
+    preferredVisualSignatures = new Set()
+  ) {
     const value = state.answers.short[item.question.id] ?? "";
+
     return `
       <div class="question-body">
-        ${renderQuestionContext(item.question)}
-        <div class="question-stem">${renderRichContent(item.question.stem)}</div>
-        ${renderPhysicsVisuals(item.question.visuals, `question-${globalIndex}`)}
+        ${renderQuestionContext(
+          item.question,
+          preferredVisualSignatures
+        )}
+
+        <div class="question-stem">
+          ${renderRichContent(
+            item.question.stem,
+            preferredVisualSignatures
+          )}
+        </div>
+
+        ${renderPhysicsVisuals(
+          item.question.visuals,
+          `question-${globalIndex}`,
+          renderedVisuals
+        )}
+
         ${renderQuestionMedia(item.question)}
+
         <div class="short-answer-box">
           <label for="short-answer-${globalIndex}">Nhập kết quả cuối cùng</label>
+
           <div class="short-answer-row">
-            <input id="short-answer-${globalIndex}" data-short-index="${globalIndex}" inputmode="decimal" autocomplete="off" value="${escapeHtml(String(value))}" placeholder="Nhập một số" />
+            <input
+              id="short-answer-${globalIndex}"
+              data-short-index="${globalIndex}"
+              inputmode="decimal"
+              autocomplete="off"
+              value="${escapeHtml(String(value))}"
+              placeholder="Nhập một số"
+            />
             <span class="unit-badge">${escapeHtml(item.question.unit || "")}</span>
           </div>
-          <p class="answer-note">Có thể dùng dấu phẩy hoặc dấu chấm cho phần thập phân. Không nhập đơn vị vào ô trả lời.</p>
+
+          <p class="answer-note">
+            Có thể dùng dấu phẩy hoặc dấu chấm cho phần thập phân.
+            Không nhập đơn vị vào ô trả lời.
+          </p>
         </div>
       </div>`;
   }
@@ -2692,7 +2939,10 @@
     return firstPipeCount >= 2 && secondPipeCount >= 2 && first.length >= 3 && second.length === first.length;
   }
 
-  function renderRichContent(value) {
+  function renderRichContent(
+    value,
+    preferredVisualSignatures = null
+  ) {
     const text = String(value ?? "").replace(/\r/g, "").trim();
     if (!text) return "";
 
@@ -2701,10 +2951,25 @@
     let paragraphLines = [];
 
     const flushParagraph = () => {
-      while (paragraphLines.length && !paragraphLines[0].trim()) paragraphLines.shift();
-      while (paragraphLines.length && !paragraphLines[paragraphLines.length - 1].trim()) paragraphLines.pop();
+      while (paragraphLines.length && !paragraphLines[0].trim()) {
+        paragraphLines.shift();
+      }
+
+      while (
+        paragraphLines.length &&
+        !paragraphLines[paragraphLines.length - 1].trim()
+      ) {
+        paragraphLines.pop();
+      }
+
       if (!paragraphLines.length) return;
-      blocks.push(`<div class="rich-text-paragraph">${renderLongText(paragraphLines.join("\n"))}</div>`);
+
+      blocks.push(
+        `<div class="rich-text-paragraph">${renderLongText(
+          paragraphLines.join("\n")
+        )}</div>`
+      );
+
       paragraphLines = [];
     };
 
@@ -2716,34 +2981,67 @@
       }
 
       let caption = "";
-      const precedingLine = String(paragraphLines[paragraphLines.length - 1] || "").trim();
+      const precedingLine = String(
+        paragraphLines[paragraphLines.length - 1] || ""
+      ).trim();
+
       if (/^bảng(?:\s+.*)?[:：]?$/i.test(precedingLine)) {
         paragraphLines.pop();
         caption = precedingLine.replace(/[:：]\s*$/, "").trim();
-        if (caption.toLowerCase() === "bảng") caption = "Bảng số liệu";
+
+        if (caption.toLowerCase() === "bảng") {
+          caption = "Bảng số liệu";
+        }
       }
 
       flushParagraph();
+
       const header = parsePipeTableRow(lines[index]);
       const rows = [];
       index += 1;
 
       if (index < lines.length) {
         const possibleSeparator = parsePipeTableRow(lines[index]);
-        if (possibleSeparator.length === header.length && isMarkdownSeparatorRow(possibleSeparator)) index += 1;
+
+        if (
+          possibleSeparator.length === header.length &&
+          isMarkdownSeparatorRow(possibleSeparator)
+        ) {
+          index += 1;
+        }
       }
 
       while (index < lines.length) {
         const rawLine = lines[index];
         const pipeCount = (String(rawLine).match(/\|/g) || []).length;
         const row = parsePipeTableRow(rawLine);
+
         if (pipeCount < 2 || row.length !== header.length) break;
+
         rows.push(row);
         index += 1;
       }
 
       if (rows.length) {
-        blocks.push(renderPhysicsTable({ caption, headers: header, rows }));
+        const tableVisual = {
+          type: "table",
+          caption,
+          headers: header,
+          rows
+        };
+
+        const signature = getVisualSignature(tableVisual);
+
+        // Nếu AI đã tạo một bảng có cấu trúc trong visuals thì không render
+        // thêm bảng chép bằng dấu | trong stem/context/passage.
+        const duplicatedByStructuredVisual =
+          signature &&
+          preferredVisualSignatures instanceof Set &&
+          preferredVisualSignatures.has(signature);
+
+        if (!duplicatedByStructuredVisual) {
+          blocks.push(renderPhysicsTable(tableVisual));
+        }
       } else {
         paragraphLines.push(header.join(" | "));
       }
@@ -2764,3 +3062,4 @@
 
   document.addEventListener("DOMContentLoaded", initialize);
 })();
+
