@@ -39,64 +39,6 @@
   const $$ = (selector) => [...document.querySelectorAll(selector)];
 
   const physicsChartInstances = [];
-  function normalizeWhitespace(text) {
-  return String(text || "")
-    .replace(/\r/g, "")
-    .replace(/\u00A0/g, " ")
-    .trim();
-}
-
-function cleanupOptionText(optionText, optionIndex = -1) {
-  let text = normalizeWhitespace(optionText);
-
-  if (!text) return "";
-
-  // Bỏ nhãn A. / B. / C. / D. nếu AI/OCR đã chép vào nội dung đáp án
-  const letter =
-    optionIndex >= 0
-      ? String.fromCharCode(65 + optionIndex)
-      : "[A-D]";
-
-  const labelRegex = new RegExp(
-    `^\\s*(?:${letter}|[A-D])[\\.|\\)|:]\\s*`,
-    "i"
-  );
-
-  text = text.replace(labelRegex, "");
-
-  // Tách dòng
-  let lines = text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  // Nếu OCR tách từng ký tự thành từng dòng: 1 / 8 / K
-  // thì gom lại thành 18 K
-  if (
-    lines.length >= 2 &&
-    lines.every(
-      (line) =>
-        line.length <= 3 ||
-        /^[0-9°%.,+\-/*=()a-zA-Z]+$/.test(line)
-    )
-  ) {
-    text = lines.join("");
-  } else {
-    text = lines.join(" ");
-  }
-
-  // Sửa khoảng trắng quanh các ký hiệu thường gặp
-  text = text
-    .replace(/\s+/g, " ")
-    .replace(/\s+([,.;:%)\]])/g, "$1")
-    .replace(/([(\[])\s+/g, "$1")
-    .replace(/(\d)\s*°\s*C/gi, "$1°C")
-    .replace(/(\d)\s*°\s*K/gi, "$1°K")
-    .replace(/(\d)\s*([a-zA-Z])/g, "$1 $2")
-    .trim();
-
-  return text;
-}
 
   function destroyPhysicsCharts() {
     while (physicsChartInstances.length > 0) {
@@ -990,15 +932,10 @@ function cleanupOptionText(optionText, optionIndex = -1) {
     }).join("");
 
     bindFullExamInputs();
-
-window.requestAnimationFrame(() => {
-  renderPhysicsCharts();
-
-  renderMathContent(
-    document.querySelector("#question-content")
-  );
-});
-    window.requestAnimationFrame(() => renderPhysicsCharts());
+    window.requestAnimationFrame(() => {
+      renderPhysicsCharts();
+      renderMathContent(container);
+    });
   }
 
   function renderQuestionGroupWithPassages(items) {
@@ -1259,9 +1196,7 @@ window.requestAnimationFrame(() => {
           ${(item.question.options || []).map((option, index) => `
             <button class="option-button ${selected === index ? "selected" : ""}" type="button" data-mcq-index="${globalIndex}" data-mcq-option="${index}" aria-pressed="${selected === index}">
               <span class="option-letter">${String.fromCharCode(65 + index)}</span>
-<span class="option-text">
-  ${renderLongText(cleanupOptionText(option, index))}
-</span>
+              <span class="option-text">${renderLongText(cleanupOptionText(option, index))}</span>
             </button>
           `).join("")}
         </div>
@@ -1279,7 +1214,7 @@ window.requestAnimationFrame(() => {
           ${(item.question.statements || []).map((statement, index) => `
             <div class="tf-row" data-tf-row="${index}">
               <span class="tf-label">${String.fromCharCode(97 + index)})</span>
-              <span class="tf-text">${renderLongText(cleanupOptionText(statement.text, index))}</span>
+              <span class="tf-text">${renderLongText(cleanupInlineDisplayText(statement.text))}</span>
               <button class="tf-choice true ${selected[index] === true ? "selected" : ""}" type="button" data-tf-question-index="${globalIndex}" data-tf-index="${index}" data-tf-value="true" aria-pressed="${selected[index] === true}">Đúng</button>
               <button class="tf-choice false ${selected[index] === false ? "selected" : ""}" type="button" data-tf-question-index="${globalIndex}" data-tf-index="${index}" data-tf-value="false" aria-pressed="${selected[index] === false}">Sai</button>
             </div>`).join("")}
@@ -2581,8 +2516,160 @@ window.requestAnimationFrame(() => {
     return String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" }[character]));
   }
 
+  function normalizeLatexEscapes(value) {
+    let text = String(value ?? "");
+
+    // Một số vòng JSON/AI có thể làm backslash bị nhân đôi. Chỉ thu gọn
+    // trước các lệnh LaTeX quen thuộc để không phá ký tự xuống dòng hợp lệ.
+    text = text.replace(
+      /\\\\(?=(?:\(|\)|\[|\]|,|;|!|quad\b|qquad\b|mathrm\b|text\b|frac\b|sqrt\b|cdot\b|times\b|circ\b|Delta\b|lambda\b|rho\b|alpha\b|beta\b|omega\b|mu\b|vec\b|left\b|right\b|pm\b|le\b|ge\b|neq\b|approx\b))/g,
+      "\\"
+    );
+
+    // OCR/LLM đôi lúc tạo \^ thay vì ^.
+    text = text.replace(/\\\^/g, "^");
+    return text;
+  }
+
+  function protectMathSegments(text) {
+    const segments = [];
+    const masked = String(text).replace(/\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]/g, (match) => {
+      const token = `@@PHYSICS_MATH_${segments.length}@@`;
+      segments.push(match);
+      return token;
+    });
+    return { masked, segments };
+  }
+
+  function restoreMathSegments(text, segments) {
+    return String(text).replace(/@@PHYSICS_MATH_(\d+)@@/g, (_, index) => segments[Number(index)] || "");
+  }
+
+  function wrapLooseLatex(value) {
+    let text = normalizeLatexEscapes(value);
+    const { masked, segments } = protectMathSegments(text);
+    text = masked;
+
+    // Sửa các mảnh LaTeX phổ biến AI đã tạo nhưng quên bọc \(...\).
+    // Mục tiêu là cứu dữ liệu cũ; dữ liệu import mới vẫn phải có delimiter chuẩn.
+    text = text.replace(
+      /([+-]?\d+(?:[.,]\d+)?(?:\\,)?\s*\^\{\\circ\}\\mathrm\{C\})/g,
+      "\\($1\\)"
+    );
+
+    text = text.replace(
+      /((?:[A-Za-z][A-Za-z0-9_{}]*\s*=\s*)?[+-]?\d+(?:[.,]\d+)?(?:\\(?:cdot|times)\s*10\^\{?-?\d+\}?)?(?:\\,)?\\mathrm\{[^{}]+\})/g,
+      "\\($1\\)"
+    );
+
+    text = text.replace(
+      /([+-]?\d+(?:[.,]\d+)?\\(?:cdot|times)\s*10\^\{?-?\d+\}?)/g,
+      "\\($1\\)"
+    );
+
+    return restoreMathSegments(text, segments);
+  }
+
+  function cleanupInlineDisplayText(value) {
+    return wrapLooseLatex(
+      String(value ?? "")
+        .replace(/\r/g, "")
+        .replace(/\u00a0/g, " ")
+        .replace(/[\u200B-\u200D\uFEFF]/g, "")
+        .replace(/[ \t]*\n[ \t]*/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+    );
+  }
+
+  function cleanupOptionText(value, optionIndex = -1) {
+    let raw = normalizeLatexEscapes(
+      String(value ?? "")
+        .replace(/\r/g, "")
+        .replace(/\u00a0/g, " ")
+        .replace(/[\u200B-\u200D\uFEFF]/g, "")
+        .trim()
+    );
+
+    if (!raw) return "";
+
+    const expectedLetter = optionIndex >= 0 ? String.fromCharCode(65 + optionIndex) : "";
+    const stripLabel = (line) => {
+      let cleaned = String(line || "").trim();
+      if (expectedLetter) {
+        cleaned = cleaned.replace(new RegExp(`^\\s*${expectedLetter}\\s*[.\\):\\]-]\\s*`, "i"), "");
+      }
+      return cleaned.replace(/^\s*[A-D]\s*[.\):\]-]\s*/i, "").trim();
+    };
+
+    const lines = raw.split("\n").map(stripLabel).filter(Boolean);
+    if (lines.length <= 1) return wrapLooseLatex(lines[0] || raw);
+
+    let result = "";
+    for (const line of lines) {
+      if (!result) {
+        result = line;
+        continue;
+      }
+
+      // Nối các chữ số OCR bị tách thành 7 / 4 / 0 hoặc 2 / 9 / 1.
+      if (/^[+-]?\d+$/.test(result) && /^\d+$/.test(line)) {
+        result += line;
+        continue;
+      }
+
+      // Nối phần thập phân bị tách kiểu 24, / 5.
+      if (/\d[,.]$/.test(result) && /^\d+$/.test(line)) {
+        result += line;
+        continue;
+      }
+
+      // Nối đơn vị bị OCR tách từng ký tự: m / l -> ml, K / . -> K.
+      if (/[A-Za-z]$/.test(result) && /^[A-Za-z]$/.test(line)) {
+        result += line;
+        continue;
+      }
+
+      if (/^[,.;:%)\]}°]/.test(line)) {
+        result += line;
+        continue;
+      }
+
+      result += ` ${line}`;
+    }
+
+    result = result
+      .replace(/\s+/g, " ")
+      .replace(/\s+([,.;:%)\]}])/g, "$1")
+      .replace(/([({\[])\s+/g, "$1")
+      .replace(/(\d)\s*°\s*C\b/gi, "$1°C")
+      .replace(/(\d)\s*°\s*K\b/gi, "$1°K")
+      .replace(/(\d)(ml|mL|kg|g|K|J|N|Pa|W|s)\b/g, "$1 $2")
+      .trim();
+
+    return wrapLooseLatex(result);
+  }
+
+  function renderMathContent(rootElement) {
+    if (!rootElement || typeof window.renderMathInElement !== "function") return;
+    try {
+      window.renderMathInElement(rootElement, {
+        delimiters: [
+          { left: "\\[", right: "\\]", display: true },
+          { left: "\\(", right: "\\)", display: false }
+        ],
+        throwOnError: false,
+        strict: false,
+        trust: false,
+        ignoredTags: ["script", "noscript", "style", "textarea", "pre", "code"]
+      });
+    } catch (error) {
+      console.error("Không render được công thức KaTeX:", error);
+    }
+  }
+
   function renderLongText(value) {
-    return escapeHtml(value).replace(/\r?\n/g, "<br>");
+    return escapeHtml(wrapLooseLatex(value)).replace(/\r?\n/g, "<br>");
   }
 
   function parsePipeTableRow(line) {
@@ -2677,38 +2764,3 @@ window.requestAnimationFrame(() => {
 
   document.addEventListener("DOMContentLoaded", initialize);
 })();
-
-function renderMathContent(rootElement) {
-  if (!rootElement) return;
-
-  if (typeof window.renderMathInElement !== "function") {
-    console.warn("KaTeX Auto Render chưa được tải.");
-    return;
-  }
-
-  try {
-    window.renderMathInElement(rootElement, {
-      delimiters: [
-        {
-          left: "\\(",
-          right: "\\)",
-          display: false
-        },
-        {
-          left: "\\[",
-          right: "\\]",
-          display: true
-        }
-      ],
-
-      throwOnError: false,
-      strict: false,
-      trust: false
-    });
-  } catch (error) {
-    console.error(
-      "Không render được công thức:",
-      error
-    );
-  }
-}

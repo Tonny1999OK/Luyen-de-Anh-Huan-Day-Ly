@@ -2221,88 +2221,63 @@ textarea:focus { border-color: var(--navy-700); box-shadow: 0 0 0 4px rgba(30,79
   }
 }
 
-/* ============================================================
-   CÔNG THỨC TOÁN - VẬT LÍ
-   ============================================================ */
 
-.katex {
-  font-size: 1.05em;
+/* ============================================================
+   FIX ĐÁP ÁN NẰM NGANG + KATEX
+   ============================================================ */
+.option-button {
+  align-items: flex-start;
+}
+
+.option-text {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+  white-space: normal !important;
+  word-break: normal !important;
+  overflow-wrap: break-word !important;
+  writing-mode: horizontal-tb !important;
+  text-orientation: mixed !important;
+  line-height: 1.65;
+}
+
+.option-text br {
+  display: none;
+}
+
+.option-text .katex,
+.option-text .katex * {
+  writing-mode: horizontal-tb !important;
+  text-orientation: mixed !important;
+}
+
+.option-text .katex {
+  white-space: nowrap;
+  font-size: 1.02em;
 }
 
 .question-stem .katex,
 .question-context .katex,
-.option-button .katex,
+.shared-passage-content .katex,
 .tf-text .katex,
-.shared-passage-content .katex {
-  color: inherit;
+.physics-data-table .katex {
+  font-size: 1.02em;
 }
 
 .katex-display {
-  margin: 18px 0;
+  max-width: 100%;
+  margin: 16px 0;
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 6px 2px;
-}
-
-.katex-display > .katex {
-  font-size: 1.12em;
-}
-
-.option-button .katex {
-  font-size: 1em;
-}
-
-.physics-data-table .katex {
-  font-size: 1em;
+  padding: 4px 0;
 }
 
 @media (max-width: 760px) {
+  .option-text {
+    line-height: 1.55;
+  }
   .katex {
     font-size: 1em;
   }
-
-  .katex-display > .katex {
-    font-size: 1.05em;
-  }
-}
-.option-button {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-  width: 100%;
-  text-align: left;
-}
-
-.option-label {
-  flex: 0 0 34px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 34px;
-  min-height: 34px;
-  font-weight: 800;
-}
-
-.option-text {
-  flex: 1;
-  min-width: 0;
-  white-space: normal;
-  word-break: normal;
-  overflow-wrap: anywhere;
-  line-height: 1.65;
-  writing-mode: horizontal-tb;
-  text-orientation: mixed;
-}
-
-.option-text p,
-.option-text span,
-.option-text div {
-  writing-mode: horizontal-tb;
-  text-orientation: mixed;
-}
-.option-text .katex,
-.option-text .katex-display {
-  writing-mode: horizontal-tb;
-  text-orientation: mixed;
-  white-space: normal;
 }
