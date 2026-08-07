@@ -932,6 +932,14 @@
     }).join("");
 
     bindFullExamInputs();
+
+window.requestAnimationFrame(() => {
+  renderPhysicsCharts();
+
+  renderMathContent(
+    document.querySelector("#question-content")
+  );
+});
     window.requestAnimationFrame(() => renderPhysicsCharts());
   }
 
@@ -2608,3 +2616,38 @@
 
   document.addEventListener("DOMContentLoaded", initialize);
 })();
+
+function renderMathContent(rootElement) {
+  if (!rootElement) return;
+
+  if (typeof window.renderMathInElement !== "function") {
+    console.warn("KaTeX Auto Render chưa được tải.");
+    return;
+  }
+
+  try {
+    window.renderMathInElement(rootElement, {
+      delimiters: [
+        {
+          left: "\\(",
+          right: "\\)",
+          display: false
+        },
+        {
+          left: "\\[",
+          right: "\\]",
+          display: true
+        }
+      ],
+
+      throwOnError: false,
+      strict: false,
+      trust: false
+    });
+  } catch (error) {
+    console.error(
+      "Không render được công thức:",
+      error
+    );
+  }
+}

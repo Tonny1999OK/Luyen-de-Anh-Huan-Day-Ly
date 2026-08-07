@@ -2220,3 +2220,48 @@ textarea:focus { border-color: var(--navy-700); box-shadow: 0 0 0 4px rgba(30,79
     contain: layout paint;
   }
 }
+
+/* ============================================================
+   CÔNG THỨC TOÁN - VẬT LÍ
+   ============================================================ */
+
+.katex {
+  font-size: 1.05em;
+}
+
+.question-stem .katex,
+.question-context .katex,
+.option-button .katex,
+.tf-text .katex,
+.shared-passage-content .katex {
+  color: inherit;
+}
+
+.katex-display {
+  margin: 18px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 6px 2px;
+}
+
+.katex-display > .katex {
+  font-size: 1.12em;
+}
+
+.option-button .katex {
+  font-size: 1em;
+}
+
+.physics-data-table .katex {
+  font-size: 1em;
+}
+
+@media (max-width: 760px) {
+  .katex {
+    font-size: 1em;
+  }
+
+  .katex-display > .katex {
+    font-size: 1.05em;
+  }
+}
