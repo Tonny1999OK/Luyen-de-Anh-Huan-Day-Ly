@@ -2265,3 +2265,44 @@ textarea:focus { border-color: var(--navy-700); box-shadow: 0 0 0 4px rgba(30,79
     font-size: 1.05em;
   }
 }
+.option-button {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  width: 100%;
+  text-align: left;
+}
+
+.option-label {
+  flex: 0 0 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  min-height: 34px;
+  font-weight: 800;
+}
+
+.option-text {
+  flex: 1;
+  min-width: 0;
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.65;
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+}
+
+.option-text p,
+.option-text span,
+.option-text div {
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+}
+.option-text .katex,
+.option-text .katex-display {
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+  white-space: normal;
+}

@@ -39,6 +39,64 @@
   const $$ = (selector) => [...document.querySelectorAll(selector)];
 
   const physicsChartInstances = [];
+  function normalizeWhitespace(text) {
+  return String(text || "")
+    .replace(/\r/g, "")
+    .replace(/\u00A0/g, " ")
+    .trim();
+}
+
+function cleanupOptionText(optionText, optionIndex = -1) {
+  let text = normalizeWhitespace(optionText);
+
+  if (!text) return "";
+
+  // Bỏ nhãn A. / B. / C. / D. nếu AI/OCR đã chép vào nội dung đáp án
+  const letter =
+    optionIndex >= 0
+      ? String.fromCharCode(65 + optionIndex)
+      : "[A-D]";
+
+  const labelRegex = new RegExp(
+    `^\\s*(?:${letter}|[A-D])[\\.|\\)|:]\\s*`,
+    "i"
+  );
+
+  text = text.replace(labelRegex, "");
+
+  // Tách dòng
+  let lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  // Nếu OCR tách từng ký tự thành từng dòng: 1 / 8 / K
+  // thì gom lại thành 18 K
+  if (
+    lines.length >= 2 &&
+    lines.every(
+      (line) =>
+        line.length <= 3 ||
+        /^[0-9°%.,+\-/*=()a-zA-Z]+$/.test(line)
+    )
+  ) {
+    text = lines.join("");
+  } else {
+    text = lines.join(" ");
+  }
+
+  // Sửa khoảng trắng quanh các ký hiệu thường gặp
+  text = text
+    .replace(/\s+/g, " ")
+    .replace(/\s+([,.;:%)\]])/g, "$1")
+    .replace(/([(\[])\s+/g, "$1")
+    .replace(/(\d)\s*°\s*C/gi, "$1°C")
+    .replace(/(\d)\s*°\s*K/gi, "$1°K")
+    .replace(/(\d)\s*([a-zA-Z])/g, "$1 $2")
+    .trim();
+
+  return text;
+}
 
   function destroyPhysicsCharts() {
     while (physicsChartInstances.length > 0) {
@@ -1200,7 +1258,10 @@ window.requestAnimationFrame(() => {
         <div class="option-list">
           ${(item.question.options || []).map((option, index) => `
             <button class="option-button ${selected === index ? "selected" : ""}" type="button" data-mcq-index="${globalIndex}" data-mcq-option="${index}" aria-pressed="${selected === index}">
-              <span class="option-letter">${String.fromCharCode(65 + index)}</span><span>${renderLongText(option)}</span>
+              <span class="option-letter">${String.fromCharCode(65 + index)}</span>
+<span class="option-text">
+  ${renderLongText(cleanupOptionText(option, index))}
+</span>
             </button>
           `).join("")}
         </div>
@@ -1218,7 +1279,7 @@ window.requestAnimationFrame(() => {
           ${(item.question.statements || []).map((statement, index) => `
             <div class="tf-row" data-tf-row="${index}">
               <span class="tf-label">${String.fromCharCode(97 + index)})</span>
-              <span class="tf-text">${renderLongText(statement.text)}</span>
+              <span class="tf-text">${renderLongText(cleanupOptionText(statement.text, index))}</span>
               <button class="tf-choice true ${selected[index] === true ? "selected" : ""}" type="button" data-tf-question-index="${globalIndex}" data-tf-index="${index}" data-tf-value="true" aria-pressed="${selected[index] === true}">Đúng</button>
               <button class="tf-choice false ${selected[index] === false ? "selected" : ""}" type="button" data-tf-question-index="${globalIndex}" data-tf-index="${index}" data-tf-value="false" aria-pressed="${selected[index] === false}">Sai</button>
             </div>`).join("")}
