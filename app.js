@@ -3101,10 +3101,20 @@
       throw new Error("Không tạo được Canvas 2D.");
     }
 
-    await page.render({
-      canvasContext: ctx,
-      viewport
-    }).promise;
+const renderParams = {
+  canvasContext: ctx,
+  viewport
+};
+
+// Không render annotation/ghi chú PDF nếu chúng được lưu dưới dạng annotation.
+const disableAnnotation =
+  window.pdfjsLib?.AnnotationMode?.DISABLE;
+
+if (disableAnnotation !== undefined) {
+  renderParams.annotationMode = disableAnnotation;
+}
+
+await page.render(renderParams).promise;
 
     return canvas;
   }
