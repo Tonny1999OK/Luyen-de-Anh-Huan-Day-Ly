@@ -617,5 +617,23 @@
   <script src="supabase-config.js"></script>
   <script src="data.js"></script>
   <script src="app.js"></script>
+
+  <script type="module">
+  window.pdfJsReady = import(
+    "https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.149/build/pdf.mjs"
+  ).then((pdfjsLib) => {
+
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.149/build/pdf.worker.mjs";
+
+    window.pdfjsLib = pdfjsLib;
+
+    console.log("✅ PDF.js đã sẵn sàng");
+
+    return pdfjsLib;
+  }).catch((error) => {
+    console.error("❌ Không tải được PDF.js:", error);
+  });
+</script>
 </body>
 </html>
