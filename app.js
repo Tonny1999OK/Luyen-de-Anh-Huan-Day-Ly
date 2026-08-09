@@ -1337,13 +1337,35 @@
   }
 
   function renderQuestionMedia(question) {
-    const imageUrl = question?.imageUrl || question?.image_url || question?.figureUrl || question?.mediaUrl || "";
-    if (!imageUrl) return "";
-    return `
+    const urls = [];
+
+    if (Array.isArray(question?.imageUrls)) {
+      question.imageUrls.forEach((url) => {
+        const value = String(url || "").trim();
+        if (value && !urls.includes(value)) urls.push(value);
+      });
+    }
+
+    const singleUrl =
+      question?.imageUrl ||
+      question?.image_url ||
+      question?.figureUrl ||
+      question?.mediaUrl ||
+      "";
+
+    if (singleUrl && !urls.includes(String(singleUrl))) {
+      urls.unshift(String(singleUrl));
+    }
+
+    if (!urls.length) return "";
+
+    return urls.map((url, index) => `
       <figure class="question-media">
-        <img src="${escapeHtml(String(imageUrl))}" alt="Hình minh họa cho câu hỏi" loading="lazy" />
-        ${question.imageCaption ? `<figcaption>${escapeHtml(question.imageCaption)}</figcaption>` : ""}
-      </figure>`;
+        <img src="${escapeHtml(String(url))}" alt="Hình minh họa cho câu hỏi" loading="lazy" />
+        ${index === 0 && question.imageCaption
+          ? `<figcaption>${escapeHtml(question.imageCaption)}</figcaption>`
+          : ""}
+      </figure>`).join("");
   }
 
   function renderFullMcq(
@@ -3084,38 +3106,31 @@
 
   async function renderPhysicsPdfPage(pdf, pageNumber, scale = 2) {
     const page = await pdf.getPage(pageNumber);
-
-    const viewport = page.getViewport({
-      scale
-    });
+    const viewport = page.getViewport({ scale });
 
     const canvas = document.createElement("canvas");
     canvas.width = Math.ceil(viewport.width);
     canvas.height = Math.ceil(viewport.height);
 
-    const ctx = canvas.getContext("2d", {
-      alpha: false
-    });
+    const ctx = canvas.getContext("2d", { alpha: false });
 
     if (!ctx) {
       throw new Error("Không tạo được Canvas 2D.");
     }
 
-const renderParams = {
-  canvasContext: ctx,
-  viewport
-};
+    const renderParams = {
+      canvasContext: ctx,
+      viewport
+    };
 
-// Không render annotation/ghi chú PDF nếu chúng được lưu dưới dạng annotation.
-const disableAnnotation =
-  window.pdfjsLib?.AnnotationMode?.DISABLE;
+    // Loại annotation/ghi chú PDF khi có thể. Nếu nét bút đã bị flatten
+    // vào nội dung trang thì AI vẫn phải đánh dấu handwritingOverlap.
+    const disableAnnotation = window.pdfjsLib?.AnnotationMode?.DISABLE;
+    if (disableAnnotation !== undefined) {
+      renderParams.annotationMode = disableAnnotation;
+    }
 
-if (disableAnnotation !== undefined) {
-  renderParams.annotationMode = disableAnnotation;
-}
-
-await page.render(renderParams).promise;
-
+    await page.render(renderParams).promise;
     return canvas;
   }
 
@@ -3130,40 +3145,530 @@ await page.render(renderParams).promise;
 
     const ratio = maxWidth / sourceCanvas.width;
     const canvas = document.createElement("canvas");
-
     canvas.width = Math.round(sourceCanvas.width * ratio);
     canvas.height = Math.round(sourceCanvas.height * ratio);
 
     const ctx = canvas.getContext("2d");
-
     if (!ctx) {
       throw new Error("Không tạo được Canvas 2D.");
     }
 
-    ctx.drawImage(
-      sourceCanvas,
-      0,
-      0,
-      canvas.width,
-      canvas.height
-    );
-
+    ctx.drawImage(sourceCanvas, 0, 0, canvas.width, canvas.height);
     return canvas;
   }
 
   function canvasToAiImage(canvas) {
     const resized = resizeCanvasForAi(canvas);
+    return resized.toDataURL("image/jpeg", 0.85);
+  }
 
-    return resized.toDataURL(
-      "image/jpeg",
-      0.85
+  async function analyzePhysicsPageWithAi(canvas, pageNumber) {
+    const imageDataUrl = canvasToAiImage(canvas);
+
+    const { data, error } = await window.supabaseClient.functions.invoke(
+      "analyze-physics-page",
+      {
+        body: {
+          pageNumber,
+          imageDataUrl
+        }
+      }
     );
+
+    if (error) {
+      let detail = "";
+
+      try {
+        if (error.context) {
+          const payload = await error.context.json();
+          detail = payload?.error || JSON.stringify(payload);
+        }
+      } catch {
+        // Không đọc được JSON lỗi thì dùng message mặc định bên dưới.
+      }
+
+      throw new Error(
+        detail ||
+        error.message ||
+        `Không phân tích được trang ${pageNumber}.`
+      );
+    }
+
+    if (!data?.result || !Array.isArray(data.result.questions)) {
+      throw new Error(
+        `AI trả dữ liệu không hợp lệ ở trang ${pageNumber}. Cần result.questions là một mảng.`
+      );
+    }
+
+    return data.result;
+  }
+
+  function clampPhysicsValue(value, min, max) {
+    return Math.min(max, Math.max(min, Number(value) || 0));
+  }
+
+  function cropPhysicsVisual(sourceCanvas, bbox, padding = 8) {
+    const x1 = clampPhysicsValue(bbox?.x1, 0, 1000);
+    const y1 = clampPhysicsValue(bbox?.y1, 0, 1000);
+    const x2 = clampPhysicsValue(bbox?.x2, 0, 1000);
+    const y2 = clampPhysicsValue(bbox?.y2, 0, 1000);
+
+    if (x2 <= x1 || y2 <= y1) {
+      throw new Error("Bounding box của AI không hợp lệ.");
+    }
+
+    let sx = Math.round(sourceCanvas.width * x1 / 1000);
+    let sy = Math.round(sourceCanvas.height * y1 / 1000);
+    let ex = Math.round(sourceCanvas.width * x2 / 1000);
+    let ey = Math.round(sourceCanvas.height * y2 / 1000);
+
+    sx = Math.max(0, sx - padding);
+    sy = Math.max(0, sy - padding);
+    ex = Math.min(sourceCanvas.width, ex + padding);
+    ey = Math.min(sourceCanvas.height, ey + padding);
+
+    const width = ex - sx;
+    const height = ey - sy;
+
+    if (width <= 1 || height <= 1) {
+      throw new Error("Vùng crop quá nhỏ hoặc không hợp lệ.");
+    }
+
+    const output = document.createElement("canvas");
+    output.width = width;
+    output.height = height;
+
+    const ctx = output.getContext("2d");
+    if (!ctx) {
+      throw new Error("Không tạo được Canvas crop.");
+    }
+
+    ctx.drawImage(
+      sourceCanvas,
+      sx,
+      sy,
+      width,
+      height,
+      0,
+      0,
+      width,
+      height
+    );
+
+    return output;
+  }
+
+  function physicsCanvasToWebp(canvas, quality = 0.9) {
+    return new Promise((resolve, reject) => {
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) {
+            reject(new Error("Không tạo được WebP."));
+            return;
+          }
+          resolve(blob);
+        },
+        "image/webp",
+        quality
+      );
+    });
+  }
+
+  async function uploadPhysicsVisual({
+    canvas,
+    examCode,
+    pageNumber,
+    questionType,
+    questionNumber,
+    visualIndex
+  }) {
+    const blob = await physicsCanvasToWebp(canvas);
+    const safeExamCode = String(examCode).replace(/[^a-zA-Z0-9_-]/g, "-");
+    const safeType = ["mcq", "tf", "short"].includes(questionType)
+      ? questionType
+      : "question";
+
+    const path =
+      `${safeExamCode}/` +
+      `${safeType}-${questionNumber}-` +
+      `page-${pageNumber}-` +
+      `${visualIndex + 1}-${Date.now()}.webp`;
+
+    const { error } = await window.supabaseClient.storage
+      .from("exam-images")
+      .upload(path, blob, {
+        contentType: "image/webp",
+        upsert: false
+      });
+
+    if (error) {
+      throw new Error(`Upload ảnh thất bại: ${error.message}`);
+    }
+
+    const { data } = window.supabaseClient.storage
+      .from("exam-images")
+      .getPublicUrl(path);
+
+    if (!data?.publicUrl) {
+      throw new Error("Không lấy được public URL của ảnh.");
+    }
+
+    return {
+      imageUrl: data.publicUrl,
+      storagePath: path
+    };
+  }
+
+  function normalizeDetectedQuestionType(detected) {
+    const rawType = String(detected?.questionType || "")
+      .trim()
+      .toLowerCase();
+
+    if (["mcq", "multiple_choice", "multiple-choice"].includes(rawType)) {
+      return "mcq";
+    }
+
+    if (["tf", "truefalse", "true_false", "true-false"].includes(rawType)) {
+      return "tf";
+    }
+
+    if (["short", "shortanswer", "short_answer", "short-answer"].includes(rawType)) {
+      return "short";
+    }
+
+    const part = Number(detected?.part);
+    if (part === 1) return "mcq";
+    if (part === 2) return "tf";
+    if (part === 3) return "short";
+
+    return "";
+  }
+
+  function findPhysicsExamQuestion(examData, questionType, number) {
+    const index = Number(number) - 1;
+
+    if (!Number.isInteger(index) || index < 0) {
+      return null;
+    }
+
+    if (questionType === "mcq") {
+      return examData.mcq?.[index] || null;
+    }
+
+    if (questionType === "tf") {
+      return examData.trueFalse?.[index] || null;
+    }
+
+    if (questionType === "short") {
+      return examData.shortAnswer?.[index] || null;
+    }
+
+    return null;
+  }
+
+  function waitPhysicsImport(ms) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
+  }
+
+  async function processAllPhysicsPdfVisuals(file, examCode, options = {}) {
+    if (!file) {
+      throw new Error("Chưa chọn file PDF.");
+    }
+
+    if (!examCode) {
+      throw new Error("Thiếu mã đề.");
+    }
+
+    if (!window.supabaseClient) {
+      throw new Error("Supabase chưa được khởi tạo.");
+    }
+
+    const delayMs = Math.max(0, Number(options.delayMs ?? 900));
+    const renderScale = Math.max(1, Number(options.renderScale ?? 2));
+    const minConfidence = Math.min(1, Math.max(0, Number(options.minConfidence ?? 0.65)));
+    const dryRun = Boolean(options.dryRun);
+
+    console.log("================================");
+    console.log("🚀 BẮT ĐẦU XỬ LÝ HÌNH PDF");
+    console.log("Đề:", examCode);
+    console.log("Chế độ:", dryRun ? "DRY RUN - không upload/ghi DB" : "UPLOAD + CẬP NHẬT DB");
+
+    const { data: examRow, error: examError } = await window.supabaseClient
+      .from("exams")
+      .select("id, code, exam_data")
+      .eq("code", examCode)
+      .single();
+
+    if (examError) throw examError;
+    if (!examRow) {
+      throw new Error(`Không tìm thấy đề ${examCode}.`);
+    }
+
+    const examData = structuredClone(examRow.exam_data || createEmptyExamData());
+    const pdf = await loadPhysicsPdf(file);
+
+    console.log(`📄 PDF có ${pdf.numPages} trang`);
+
+    const report = {
+      pages: pdf.numPages,
+      analyzedPages: 0,
+      failedPages: 0,
+      detectedVisuals: 0,
+      uploaded: 0,
+      skipped: 0,
+      review: [],
+      uploads: []
+    };
+
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+      console.log(`🔍 Trang ${pageNumber}/${pdf.numPages}`);
+
+      const pageCanvas = await renderPhysicsPdfPage(pdf, pageNumber, renderScale);
+      let analysis;
+
+      try {
+        analysis = await analyzePhysicsPageWithAi(pageCanvas, pageNumber);
+        report.analyzedPages += 1;
+      } catch (error) {
+        console.error(`❌ AI lỗi trang ${pageNumber}:`, error);
+        report.failedPages += 1;
+        report.review.push({
+          page: pageNumber,
+          reason: error?.message || String(error)
+        });
+
+        if (pageNumber < pdf.numPages && delayMs > 0) {
+          await waitPhysicsImport(delayMs);
+        }
+        continue;
+      }
+
+      const questions = Array.isArray(analysis.questions)
+        ? analysis.questions
+        : [];
+
+      for (const detected of questions) {
+        const questionType = normalizeDetectedQuestionType(detected);
+        const questionNumber = Number(detected?.number);
+        const visuals = Array.isArray(detected?.visuals)
+          ? detected.visuals
+          : [];
+
+        const imageVisuals = visuals.filter(
+          (visual) => String(visual?.type || "").toLowerCase() === "image" && visual?.bbox
+        );
+
+        if (!imageVisuals.length) continue;
+        report.detectedVisuals += imageVisuals.length;
+
+        if (!questionType || !Number.isInteger(questionNumber) || questionNumber <= 0) {
+          report.skipped += imageVisuals.length;
+          report.review.push({
+            page: pageNumber,
+            number: detected?.number ?? null,
+            type: detected?.questionType || "",
+            reason: "AI chưa xác định được questionType/part hoặc số câu hợp lệ."
+          });
+          continue;
+        }
+
+        const targetQuestion = findPhysicsExamQuestion(
+          examData,
+          questionType,
+          questionNumber
+        );
+
+        if (!targetQuestion) {
+          console.warn("⚠️ Không tìm thấy câu:", questionType, questionNumber);
+          report.skipped += imageVisuals.length;
+          report.review.push({
+            page: pageNumber,
+            type: questionType,
+            number: questionNumber,
+            reason: "Không tìm thấy câu tương ứng trong exam_data."
+          });
+          continue;
+        }
+
+        const imageUrls = [];
+        const visualMeta = [];
+
+        for (let visualIndex = 0; visualIndex < imageVisuals.length; visualIndex += 1) {
+          const visual = imageVisuals[visualIndex];
+          const confidenceRaw = Number(visual?.confidence);
+          const confidence = Number.isFinite(confidenceRaw) ? confidenceRaw : 1;
+          const needsReview = Boolean(visual?.needsReview);
+          const handwritingOverlap = Boolean(visual?.handwritingOverlap);
+
+          if (confidence < minConfidence) {
+            console.warn(
+              `⚠️ Confidence thấp: trang ${pageNumber}, ${questionType} câu ${questionNumber}`
+            );
+            report.skipped += 1;
+            report.review.push({
+              page: pageNumber,
+              type: questionType,
+              number: questionNumber,
+              confidence,
+              reason: "AI nhận diện hình với độ tin cậy thấp."
+            });
+            continue;
+          }
+
+          let crop;
+          try {
+            crop = cropPhysicsVisual(pageCanvas, visual.bbox);
+          } catch (error) {
+            report.skipped += 1;
+            report.review.push({
+              page: pageNumber,
+              type: questionType,
+              number: questionNumber,
+              reason: error?.message || String(error)
+            });
+            continue;
+          }
+
+          if (dryRun) {
+            visualMeta.push({
+              description: String(visual?.description || ""),
+              confidence,
+              handwritingOverlap,
+              needsReview,
+              bbox: visual.bbox,
+              imageUrl: ""
+            });
+            console.log(
+              `🧪 DRY RUN: ${questionType} câu ${questionNumber}, hình ${visualIndex + 1}`
+            );
+            continue;
+          }
+
+          try {
+            const uploaded = await uploadPhysicsVisual({
+              canvas: crop,
+              examCode,
+              pageNumber,
+              questionType,
+              questionNumber,
+              visualIndex
+            });
+
+            imageUrls.push(uploaded.imageUrl);
+            visualMeta.push({
+              description: String(visual?.description || ""),
+              confidence,
+              handwritingOverlap,
+              needsReview,
+              bbox: visual.bbox,
+              imageUrl: uploaded.imageUrl,
+              storagePath: uploaded.storagePath
+            });
+
+            report.uploaded += 1;
+            report.uploads.push({
+              page: pageNumber,
+              type: questionType,
+              number: questionNumber,
+              imageUrl: uploaded.imageUrl,
+              storagePath: uploaded.storagePath
+            });
+
+            console.log(
+              `✅ ${questionType} câu ${questionNumber}, hình ${visualIndex + 1}:`,
+              uploaded.imageUrl
+            );
+          } catch (error) {
+            report.skipped += 1;
+            console.error("Upload ảnh lỗi:", error);
+            report.review.push({
+              page: pageNumber,
+              type: questionType,
+              number: questionNumber,
+              reason: error?.message || String(error)
+            });
+          }
+        }
+
+        if (imageUrls.length) {
+          const existingUrls = Array.isArray(targetQuestion.imageUrls)
+            ? targetQuestion.imageUrls.map(String).filter(Boolean)
+            : [];
+
+          const mergedUrls = [...existingUrls];
+          imageUrls.forEach((url) => {
+            if (!mergedUrls.includes(url)) mergedUrls.push(url);
+          });
+
+          targetQuestion.imageRequired = true;
+          targetQuestion.imageUrl = mergedUrls[0] || imageUrls[0];
+          targetQuestion.imageUrls = mergedUrls;
+          targetQuestion.imageCaption = targetQuestion.imageCaption || "Hình minh họa cho câu hỏi";
+          targetQuestion.visualImageMeta = [
+            ...(Array.isArray(targetQuestion.visualImageMeta)
+              ? targetQuestion.visualImageMeta
+              : []),
+            ...visualMeta
+          ];
+        }
+
+        if (imageVisuals.some((visual) => visual?.handwritingOverlap || visual?.needsReview)) {
+          targetQuestion.needsReview = true;
+          report.review.push({
+            page: pageNumber,
+            type: questionType,
+            number: questionNumber,
+            reason: "AI phát hiện hình cần giáo viên kiểm tra lại."
+          });
+        }
+      }
+
+      if (pageNumber < pdf.numPages && delayMs > 0) {
+        await waitPhysicsImport(delayMs);
+      }
+    }
+
+    if (!dryRun) {
+      console.log("💾 Đang lưu exam_data...");
+
+      const { data: updated, error: updateError } = await window.supabaseClient
+        .from("exams")
+        .update({ exam_data: examData })
+        .eq("id", examRow.id)
+        .select("id, code")
+        .single();
+
+      if (updateError) throw updateError;
+
+      console.log("✅ ĐÃ HOÀN THÀNH", updated);
+      if (report.review.length) console.table(report.review);
+      console.log("📊 BÁO CÁO:", report);
+
+      return {
+        updated,
+        report,
+        examData
+      };
+    }
+
+    console.log("🧪 DRY RUN hoàn tất. Không upload ảnh và không sửa database.");
+    if (report.review.length) console.table(report.review);
+    console.log("📊 BÁO CÁO:", report);
+
+    return {
+      updated: null,
+      report,
+      examData
+    };
   }
 
   window.loadPhysicsPdf = loadPhysicsPdf;
   window.renderPhysicsPdfPage = renderPhysicsPdfPage;
   window.resizeCanvasForAi = resizeCanvasForAi;
   window.canvasToAiImage = canvasToAiImage;
+  window.analyzePhysicsPageWithAi = analyzePhysicsPageWithAi;
+  window.cropPhysicsVisual = cropPhysicsVisual;
+  window.processAllPhysicsPdfVisuals = processAllPhysicsPdfVisuals;
 
   document.addEventListener("DOMContentLoaded", initialize);
 })();
