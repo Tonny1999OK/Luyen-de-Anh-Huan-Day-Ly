@@ -3162,46 +3162,100 @@
     return resized.toDataURL("image/jpeg", 0.85);
   }
 
-  async function analyzePhysicsPageWithAi(canvas, pageNumber) {
-    const imageDataUrl = canvasToAiImage(canvas);
+  async function analyzePhysicsPageWithAi(
+  canvas,
+  pageNumber,
+  maxAttempts = 3
+) {
+  const imageDataUrl =
+    window.canvasToAiImage(canvas);
 
-    const { data, error } = await window.supabaseClient.functions.invoke(
-      "analyze-physics-page",
-      {
-        body: {
-          pageNumber,
-          imageDataUrl
-        }
-      }
-    );
+  let lastError = null;
 
-    if (error) {
-      let detail = "";
-
-      try {
-        if (error.context) {
-          const payload = await error.context.json();
-          detail = payload?.error || JSON.stringify(payload);
-        }
-      } catch {
-        // Không đọc được JSON lỗi thì dùng message mặc định bên dưới.
-      }
-
-      throw new Error(
-        detail ||
-        error.message ||
-        `Không phân tích được trang ${pageNumber}.`
+  for (
+    let attempt = 1;
+    attempt <= maxAttempts;
+    attempt += 1
+  ) {
+    try {
+      console.log(
+        `🤖 AI trang ${pageNumber}, lần ${attempt}/${maxAttempts}`
       );
-    }
 
-    if (!data?.result || !Array.isArray(data.result.questions)) {
-      throw new Error(
-        `AI trả dữ liệu không hợp lệ ở trang ${pageNumber}. Cần result.questions là một mảng.`
+      const { data, error } =
+        await window.supabaseClient.functions.invoke(
+          "analyze-physics-page",
+          {
+            body: {
+              pageNumber,
+              imageDataUrl
+            }
+          }
+        );
+
+      if (error) {
+        let detail = "";
+
+        try {
+          if (error.context) {
+            const payload =
+              await error.context.json();
+
+            detail =
+              payload?.error ||
+              JSON.stringify(payload);
+          }
+        } catch {
+          // bỏ qua
+        }
+
+        throw new Error(
+          detail ||
+          error.message ||
+          `Không phân tích được trang ${pageNumber}.`
+        );
+      }
+
+      if (
+        !data?.result ||
+        typeof data.result !== "object" ||
+        !Array.isArray(data.result.questions)
+      ) {
+        throw new Error(
+          `AI trả JSON sai schema ở trang ${pageNumber}.`
+        );
+      }
+
+      console.log(
+        `✅ AI trang ${pageNumber} thành công`
       );
-    }
 
-    return data.result;
+      return data.result;
+    } catch (error) {
+      lastError = error;
+
+      console.warn(
+        `⚠️ AI trang ${pageNumber} thất bại lần ${attempt}:`,
+        error.message
+      );
+
+      if (attempt < maxAttempts) {
+        await new Promise(
+          resolve =>
+            setTimeout(
+              resolve,
+              1500 * attempt
+            )
+        );
+      }
+    }
   }
+
+  throw new Error(
+    `AI thất bại ${maxAttempts} lần ở trang ${pageNumber}: ` +
+    (lastError?.message || "Lỗi không xác định")
+  );
+}
 
   function clampPhysicsValue(value, min, max) {
     return Math.min(max, Math.max(min, Number(value) || 0));
