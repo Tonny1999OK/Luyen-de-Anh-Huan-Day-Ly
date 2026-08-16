@@ -2281,3 +2281,52 @@ textarea:focus { border-color: var(--navy-700); box-shadow: 0 0 0 4px rgba(30,79
     font-size: 1em;
   }
 }
+
+/* ============================================================
+   VISUAL PIPELINE V14 - ẢNH CROP GỌN + KATEX ỔN ĐỊNH
+   ============================================================ */
+.question-media {
+  width: fit-content;
+  max-width: min(760px, 100%);
+  min-width: min(280px, 100%);
+  margin-left: auto;
+  margin-right: auto;
+  overflow: hidden;
+}
+
+.question-media img {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 520px;
+  object-fit: contain;
+  background: #fff;
+}
+
+.question-media figcaption {
+  max-width: 680px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.question-stem .katex,
+.question-context .katex,
+.shared-passage-content .katex,
+.tf-text .katex,
+.option-text .katex,
+.physics-data-table .katex {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+@media (max-width: 760px) {
+  .question-media {
+    min-width: 0;
+    width: 100%;
+    padding: 8px;
+  }
+
+  .question-media img {
+    max-height: 420px;
+  }
+}

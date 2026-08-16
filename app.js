@@ -964,6 +964,8 @@
       return;
     }
 
+    const renderedMediaSignatures = new Set();
+
     const groups = [
       {
         part: 1,
@@ -1001,7 +1003,7 @@
           </header>
 
           <div class="exam-question-list">
-            ${renderQuestionGroupWithPassages(items)}
+            ${renderQuestionGroupWithPassages(items, renderedMediaSignatures)}
           </div>
         </section>`;
     }).join("");
@@ -1014,7 +1016,7 @@
     });
   }
 
-  function renderQuestionGroupWithPassages(items) {
+  function renderQuestionGroupWithPassages(items, renderedMediaSignatures = new Set()) {
     const renderedPassages = new Set();
     const renderedVisuals = new Set();
 
@@ -1045,7 +1047,8 @@
         item,
         globalIndex,
         renderedVisuals,
-        preferredVisualSignatures
+        preferredVisualSignatures,
+        renderedMediaSignatures
       )}`;
     }).join("");
   }
@@ -1104,7 +1107,8 @@
     item,
     globalIndex,
     renderedVisuals = new Set(),
-    preferredVisualSignatures = new Set()
+    preferredVisualSignatures = new Set(),
+    renderedMediaSignatures = new Set()
   ) {
     const status = getItemStatus(item);
     const marked = state.reviewFlags.has(globalIndex);
@@ -1125,15 +1129,15 @@
         </div>
 
         ${item.type === "mcq"
-          ? renderFullMcq(item, globalIndex, renderedVisuals, preferredVisualSignatures)
+          ? renderFullMcq(item, globalIndex, renderedVisuals, preferredVisualSignatures, renderedMediaSignatures)
           : ""}
 
         ${item.type === "tf"
-          ? renderFullTrueFalse(item, globalIndex, renderedVisuals, preferredVisualSignatures)
+          ? renderFullTrueFalse(item, globalIndex, renderedVisuals, preferredVisualSignatures, renderedMediaSignatures)
           : ""}
 
         ${item.type === "short"
-          ? renderFullShortAnswer(item, globalIndex, renderedVisuals, preferredVisualSignatures)
+          ? renderFullShortAnswer(item, globalIndex, renderedVisuals, preferredVisualSignatures, renderedMediaSignatures)
           : ""}
       </article>`;
   }
@@ -1336,7 +1340,59 @@
     });
   }
 
-  function renderQuestionMedia(question) {
+  function physicsMediaBBoxSignature(question, bbox) {
+    if (!bbox) return "";
+    const page = Number(question?.sourcePage || 0);
+    const quantize = (value) => Math.round((Number(value) || 0) / 20);
+    return [
+      page,
+      quantize(bbox.x1),
+      quantize(bbox.y1),
+      quantize(bbox.x2),
+      quantize(bbox.y2)
+    ].join(":");
+  }
+
+  function getQuestionMediaEntries(question) {
+    const meta = Array.isArray(question?.visualImageMeta)
+      ? question.visualImageMeta
+      : [];
+
+    // Nếu có metadata từ pipeline AI, ưu tiên nó vì có bbox để loại bản crop trùng.
+    if (meta.length) {
+      const bySignature = new Map();
+
+      for (const item of meta) {
+        const imageUrl = String(item?.imageUrl || "").trim();
+        const bbox = item?.bbox;
+        if (!imageUrl || !bbox) continue;
+        if (
+          item?.needsReview ||
+          item?.handwritingOverlap ||
+          item?.containsHandwriting ||
+          item?.containsAnswerText ||
+          item?.cropSafe === false
+        ) {
+          continue;
+        }
+
+        const signature =
+          physicsMediaBBoxSignature(question, bbox) ||
+          `url:${imageUrl}`;
+
+        // Giữ bản mới nhất nếu cùng bbox đã được upload qua nhiều lần REAL RUN.
+        bySignature.set(signature, {
+          url: imageUrl,
+          signature,
+          bbox
+        });
+      }
+
+      if (bySignature.size) {
+        return [...bySignature.values()];
+      }
+    }
+
     const urls = [];
 
     if (Array.isArray(question?.imageUrls)) {
@@ -1357,11 +1413,34 @@
       urls.unshift(String(singleUrl));
     }
 
-    if (!urls.length) return "";
+    return urls.map((url) => ({
+      url,
+      signature: `url:${url}`,
+      bbox: null
+    }));
+  }
 
-    return urls.map((url, index) => `
+  function renderQuestionMedia(
+    question,
+    renderedMediaSignatures = new Set()
+  ) {
+    const entries = getQuestionMediaEntries(question);
+    if (!entries.length) return "";
+
+    const visible = [];
+
+    for (const entry of entries) {
+      const signature = entry.signature || `url:${entry.url}`;
+      if (renderedMediaSignatures.has(signature)) continue;
+      renderedMediaSignatures.add(signature);
+      visible.push(entry);
+    }
+
+    if (!visible.length) return "";
+
+    return visible.map((entry, index) => `
       <figure class="question-media">
-        <img src="${escapeHtml(String(url))}" alt="Hình minh họa cho câu hỏi" loading="lazy" />
+        <img src="${escapeHtml(String(entry.url))}" alt="Hình minh họa cho câu hỏi" loading="lazy" />
         ${index === 0 && question.imageCaption
           ? `<figcaption>${escapeHtml(question.imageCaption)}</figcaption>`
           : ""}
@@ -1372,7 +1451,8 @@
     item,
     globalIndex,
     renderedVisuals = new Set(),
-    preferredVisualSignatures = new Set()
+    preferredVisualSignatures = new Set(),
+    renderedMediaSignatures = new Set()
   ) {
     const selected = state.answers.mcq[item.question.id];
 
@@ -1396,7 +1476,7 @@
           renderedVisuals
         )}
 
-        ${renderQuestionMedia(item.question)}
+        ${renderQuestionMedia(item.question, renderedMediaSignatures)}
 
         <div class="option-list">
           ${(item.question.options || []).map((option, index) => `
@@ -1419,7 +1499,8 @@
     item,
     globalIndex,
     renderedVisuals = new Set(),
-    preferredVisualSignatures = new Set()
+    preferredVisualSignatures = new Set(),
+    renderedMediaSignatures = new Set()
   ) {
     const selected = state.answers.tf[item.question.id] || {};
 
@@ -1436,7 +1517,7 @@
           renderedVisuals
         )}
 
-        ${renderQuestionMedia(item.question)}
+        ${renderQuestionMedia(item.question, renderedMediaSignatures)}
 
         <div class="tf-list">
           ${(item.question.statements || []).map((statement, index) => `
@@ -1461,7 +1542,8 @@
     item,
     globalIndex,
     renderedVisuals = new Set(),
-    preferredVisualSignatures = new Set()
+    preferredVisualSignatures = new Set(),
+    renderedMediaSignatures = new Set()
   ) {
     const value = state.answers.short[item.question.id] ?? "";
 
@@ -1485,7 +1567,7 @@
           renderedVisuals
         )}
 
-        ${renderQuestionMedia(item.question)}
+        ${renderQuestionMedia(item.question, renderedMediaSignatures)}
 
         <div class="short-answer-box">
           <label for="short-answer-${globalIndex}">Nhập kết quả cuối cùng</label>
@@ -2802,7 +2884,9 @@
 
   function protectMathSegments(text) {
     const segments = [];
-    const masked = String(text).replace(/\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]/g, (match) => {
+    const pattern =
+      /\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]|\$\$[\s\S]*?\$\$|\$(?!\$)[^$\n]+?\$/g;
+    const masked = String(text).replace(pattern, (match) => {
       const token = `@@PHYSICS_MATH_${segments.length}@@`;
       segments.push(match);
       return token;
@@ -2819,11 +2903,31 @@
     const { masked, segments } = protectMathSegments(text);
     text = masked;
 
-    // Sửa các mảnh LaTeX phổ biến AI đã tạo nhưng quên bọc \(...\).
-    // Mục tiêu là cứu dữ liệu cũ; dữ liệu import mới vẫn phải có delimiter chuẩn.
+    // Sửa dấu phẩy kiểu LaTeX bị lộ ra ngoài math: 4{,}2 -> 4,2.
+    text = text.replace(/(\d)\{,\}(\d)/g, "$1,$2");
+
+    // OCR/LLM đôi lúc làm mất backslash ở tên đại lượng Hy Lạp.
+    text = text
+      .replace(/\brho\s*=/gi, "\\rho =")
+      .replace(/\blambda\s*=/gi, "\\lambda =");
+
+    // Nhiệt độ: hỗ trợ cả 20^\circ\mathrm{C}, 20^{\circ}\mathrm{C}, 20 °C.
     text = text.replace(
-      /([+-]?\d+(?:[.,]\d+)?(?:\\,)?\s*\^\{\\circ\}\\mathrm\{C\})/g,
-      "\\($1\\)"
+      /([+-]?\d+(?:[.,]\d+)?)\s*(?:\^\{?\\circ\}?|\\circ|°)\s*(?:\\mathrm\{C\}|C\b)/g,
+      (_, number) => `\\(${number}^{\\circ}\\mathrm{C}\\)`
+    );
+
+    // Trường hợp chỉ còn đơn vị độ C mà không có số ngay trước.
+    text = text.replace(
+      /(?<![A-Za-z0-9])\^\{?\\circ\}?\s*\\mathrm\{C\}/g,
+      "\\(^{\\circ}\\mathrm{C}\\)"
+    );
+
+    // Các đại lượng thường gặp trong đề Vật lí.
+    // Chỉ bọc đến dấu ; hoặc xuống dòng để không nuốt cả câu văn.
+    text = text.replace(
+      /((?:\\rho|\\lambda)\s*=\s*[+-]?\d+(?:[.,]\d+)?(?:\s*[A-Za-z]+(?:\/[A-Za-z]+)?(?:\^-?\d+)?)?)/g,
+      (match) => `\\(${match.trim()}\\)`
     );
 
     text = text.replace(
@@ -2834,6 +2938,12 @@
     text = text.replace(
       /([+-]?\d+(?:[.,]\d+)?\\(?:cdot|times)\s*10\^\{?-?\d+\}?)/g,
       "\\($1\\)"
+    );
+
+    // Các lệnh phân số/căn/vector/Delta bị để trần.
+    text = text.replace(
+      /((?:[A-Za-z]\w*\s*=\s*)?(?:\\frac\{[^{}\n]*\}\{[^{}\n]*\}|\\sqrt\{[^{}\n]*\}|\\vec\{[^{}\n]*\}|\\Delta\b[^;,\n]*))/g,
+      (match) => `\\(${match.trim()}\\)`
     );
 
     return restoreMathSegments(text, segments);
@@ -2925,7 +3035,9 @@
       window.renderMathInElement(rootElement, {
         delimiters: [
           { left: "\\[", right: "\\]", display: true },
-          { left: "\\(", right: "\\)", display: false }
+          { left: "$$", right: "$$", display: true },
+          { left: "\\(", right: "\\)", display: false },
+          { left: "$", right: "$", display: false }
         ],
         throwOnError: false,
         strict: false,
@@ -3259,7 +3371,7 @@
     return Math.min(max, Math.max(min, Number(value) || 0));
   }
 
-  function cropPhysicsVisual(sourceCanvas, bbox, padding = 8) {
+  function cropPhysicsVisual(sourceCanvas, bbox, padding = 2) {
     const x1 = clampPhysicsValue(bbox?.x1, 0, 1000);
     const y1 = clampPhysicsValue(bbox?.y1, 0, 1000);
     const x2 = clampPhysicsValue(bbox?.x2, 0, 1000);
@@ -3344,13 +3456,13 @@
       `${safeExamCode}/` +
       `${safeType}-${questionNumber}-` +
       `page-${pageNumber}-` +
-      `${visualIndex + 1}-${Date.now()}.webp`;
+      `${visualIndex + 1}.webp`;
 
     const { error } = await window.supabaseClient.storage
       .from("exam-images")
       .upload(path, blob, {
         contentType: "image/webp",
-        upsert: false
+        upsert: true
       });
 
     if (error) {
@@ -3418,10 +3530,16 @@
         number,
         id: String(question.id || `${questionType}-${number}`),
         sourcePage: page,
+        topic: String(question.topic || "").replace(/\s+/g, " ").trim().slice(0, 100),
+        passageId: String(question.passageId || "").trim(),
+        context: String(question.context || "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 500),
         stem: String(stemSource || "")
           .replace(/\s+/g, " ")
           .trim()
-          .slice(0, 220)
+          .slice(0, 500)
       });
     };
 
@@ -3608,6 +3726,59 @@
     return new Promise((resolve) => window.setTimeout(resolve, ms));
   }
 
+  function physicsBBoxArea(bbox) {
+    return Math.max(0, Number(bbox?.x2) - Number(bbox?.x1)) *
+      Math.max(0, Number(bbox?.y2) - Number(bbox?.y1));
+  }
+
+  function physicsBBoxIoU(a, b) {
+    const ix1 = Math.max(Number(a?.x1), Number(b?.x1));
+    const iy1 = Math.max(Number(a?.y1), Number(b?.y1));
+    const ix2 = Math.min(Number(a?.x2), Number(b?.x2));
+    const iy2 = Math.min(Number(a?.y2), Number(b?.y2));
+    const intersection =
+      Math.max(0, ix2 - ix1) * Math.max(0, iy2 - iy1);
+    if (!intersection) return 0;
+    const union = physicsBBoxArea(a) + physicsBBoxArea(b) - intersection;
+    return union > 0 ? intersection / union : 0;
+  }
+
+  function isPipelineExamImageUrl(url) {
+    const value = String(url || "");
+    return value.includes("/storage/v1/object/public/exam-images/") ||
+      value.includes("/exam-images/");
+  }
+
+  function clearGeneratedPhysicsVisualFields(examData) {
+    const lists = [
+      examData?.mcq || [],
+      examData?.trueFalse || [],
+      examData?.shortAnswer || []
+    ];
+
+    for (const list of lists) {
+      for (const question of list) {
+        const hasAiMeta =
+          Array.isArray(question?.visualImageMeta) &&
+          question.visualImageMeta.length > 0;
+        const urls = [
+          question?.imageUrl,
+          ...(Array.isArray(question?.imageUrls) ? question.imageUrls : [])
+        ].filter(Boolean);
+        const hasPipelineUrl = urls.some(isPipelineExamImageUrl);
+
+        // Chỉ xóa ảnh do pipeline tạo. Ảnh thủ công/external không bị đụng tới.
+        if (!hasAiMeta && !hasPipelineUrl) continue;
+
+        delete question.imageUrl;
+        delete question.imageUrls;
+        delete question.imageCaption;
+        delete question.visualImageMeta;
+        delete question.imageRequired;
+      }
+    }
+  }
+
   async function processAllPhysicsPdfVisuals(file, examCode, options = {}) {
     if (!file) {
       throw new Error("Chưa chọn file PDF.");
@@ -3628,6 +3799,14 @@
       Math.max(0, Number(options.minConfidence ?? 0.65))
     );
     const dryRun = Boolean(options.dryRun);
+    const replaceExistingVisuals =
+      options.replaceExistingVisuals !== false;
+    const allowReviewVisuals =
+      options.allowReviewVisuals === true;
+    const cropPadding = Math.max(
+      0,
+      Math.min(12, Number(options.cropPadding ?? 2))
+    );
 
     console.log("================================");
     console.log("🚀 BẮT ĐẦU XỬ LÝ HÌNH PDF");
@@ -3654,6 +3833,12 @@
     const examData = structuredClone(
       examRow.exam_data || createEmptyExamData()
     );
+
+    if (!dryRun && replaceExistingVisuals) {
+      clearGeneratedPhysicsVisualFields(examData);
+      console.log("🧹 Đã xóa tham chiếu ảnh AI cũ trong bản clone trước REAL RUN.");
+    }
+
     const pdf = await loadPhysicsPdf(file);
 
     console.log(`📄 PDF có ${pdf.numPages} trang`);
@@ -3666,6 +3851,8 @@
       mappedVisuals: 0,
       uploaded: 0,
       skipped: 0,
+      unsafeSkipped: 0,
+      duplicateSkipped: 0,
       review: [],
       uploads: []
     };
@@ -3739,6 +3926,8 @@
         failed: false,
         detections: []
       };
+
+      const claimedPageVisuals = [];
 
       for (const detected of questions) {
         const visuals = Array.isArray(detected?.visuals)
@@ -3834,8 +4023,52 @@
             Boolean(visual?.needsReview) ||
             Boolean(mapping.needsReview);
           const handwritingOverlap = Boolean(
-            visual?.handwritingOverlap
+            visual?.handwritingOverlap ||
+            visual?.containsHandwriting
           );
+          const containsAnswerText = Boolean(
+            visual?.containsAnswerText
+          );
+          const cropSafe = visual?.cropSafe !== false;
+
+          if (
+            !cropSafe ||
+            containsAnswerText ||
+            handwritingOverlap ||
+            (needsReview && !allowReviewVisuals)
+          ) {
+            report.skipped += 1;
+            report.unsafeSkipped += 1;
+            report.review.push({
+              page: pageNumber,
+              questionKey,
+              reason:
+                containsAnswerText
+                  ? "Bỏ crop vì AI phát hiện bbox dính đáp án/lựa chọn."
+                  : handwritingOverlap
+                    ? "Bỏ crop vì bbox còn dính chữ viết tay/annotation."
+                    : "Bỏ crop vì AI đánh dấu crop không an toàn hoặc cần review."
+            });
+            continue;
+          }
+
+          const duplicateOwner = claimedPageVisuals.find(
+            (entry) =>
+              entry.questionKey !== questionKey &&
+              physicsBBoxIoU(entry.bbox, visual.bbox) >= 0.86
+          );
+
+          if (duplicateOwner) {
+            report.skipped += 1;
+            report.duplicateSkipped += 1;
+            report.review.push({
+              page: pageNumber,
+              questionKey,
+              reason:
+                `Bỏ visual trùng bbox với ${duplicateOwner.questionKey}.`
+            });
+            continue;
+          }
 
           if (confidence < minConfidence) {
             console.warn(
@@ -3858,7 +4091,8 @@
           try {
             crop = cropPhysicsVisual(
               pageCanvas,
-              visual.bbox
+              visual.bbox,
+              cropPadding
             );
           } catch (error) {
             report.skipped += 1;
@@ -3870,6 +4104,11 @@
             continue;
           }
 
+          claimedPageVisuals.push({
+            questionKey,
+            bbox: visual.bbox
+          });
+
           if (dryRun) {
             visualMeta.push({
               questionKey,
@@ -3878,6 +4117,9 @@
               ),
               confidence,
               handwritingOverlap,
+              containsHandwriting: handwritingOverlap,
+              containsAnswerText,
+              cropSafe,
               needsReview,
               bbox: visual.bbox,
               imageUrl: ""
@@ -3908,6 +4150,9 @@
               ),
               confidence,
               handwritingOverlap,
+              containsHandwriting: handwritingOverlap,
+              containsAnswerText,
+              cropSafe,
               needsReview,
               bbox: visual.bbox,
               imageUrl: uploaded.imageUrl,
@@ -3940,42 +4185,21 @@
         }
 
         if (imageUrls.length) {
-          const existingUrls = Array.isArray(
-            targetQuestion.imageUrls
-          )
-            ? targetQuestion.imageUrls
-                .map(String)
-                .filter(Boolean)
-            : [];
-
-          const mergedUrls = [...existingUrls];
-          imageUrls.forEach((url) => {
-            if (!mergedUrls.includes(url)) {
-              mergedUrls.push(url);
-            }
-          });
-
+          // REAL RUN mới thay thế ảnh pipeline cũ, không cộng dồn URL từ các lần chạy trước.
           targetQuestion.imageRequired = true;
-          targetQuestion.imageUrl =
-            mergedUrls[0] || imageUrls[0];
-          targetQuestion.imageUrls = mergedUrls;
-          targetQuestion.imageCaption =
-            targetQuestion.imageCaption ||
-            "Hình minh họa cho câu hỏi";
-          targetQuestion.visualImageMeta = [
-            ...(Array.isArray(
-              targetQuestion.visualImageMeta
-            )
-              ? targetQuestion.visualImageMeta
-              : []),
-            ...visualMeta
-          ];
+          targetQuestion.imageUrl = imageUrls[0];
+          targetQuestion.imageUrls = [...new Set(imageUrls)];
+          targetQuestion.imageCaption = "Hình minh họa cho câu hỏi";
+          targetQuestion.visualImageMeta = visualMeta;
         }
 
         if (
           imageVisuals.some(
             (visual) =>
               visual?.handwritingOverlap ||
+              visual?.containsHandwriting ||
+              visual?.containsAnswerText ||
+              visual?.cropSafe === false ||
               visual?.needsReview
           )
         ) {
@@ -3997,6 +4221,13 @@
       ) {
         await waitPhysicsImport(delayMs);
       }
+    }
+
+    if (!dryRun && report.failedPages > 0) {
+      throw new Error(
+        `REAL RUN có ${report.failedPages} trang AI thất bại. ` +
+        "Không ghi exam_data để tránh làm mất/ghi thiếu ảnh. Hãy sửa lỗi rồi chạy lại."
+      );
     }
 
     if (!dryRun) {
