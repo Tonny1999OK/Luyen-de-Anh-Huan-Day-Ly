@@ -3163,99 +3163,97 @@
   }
 
   async function analyzePhysicsPageWithAi(
-  canvas,
-  pageNumber,
-  maxAttempts = 3
-) {
-  const imageDataUrl =
-    window.canvasToAiImage(canvas);
-
-  let lastError = null;
-
-  for (
-    let attempt = 1;
-    attempt <= maxAttempts;
-    attempt += 1
+    canvas,
+    pageNumber,
+    questionsOnPage = [],
+    maxAttempts = 3
   ) {
-    try {
-      console.log(
-        `🤖 AI trang ${pageNumber}, lần ${attempt}/${maxAttempts}`
-      );
+    const imageDataUrl = window.canvasToAiImage(canvas);
+    const allowedQuestions = Array.isArray(questionsOnPage)
+      ? questionsOnPage.map((question) => ({
+          questionKey: String(question?.questionKey || ""),
+          questionType: String(question?.questionType || ""),
+          number: Number(question?.number),
+          id: String(question?.id || ""),
+          stem: String(question?.stem || "").slice(0, 220)
+        }))
+      : [];
 
-      const { data, error } =
-        await window.supabaseClient.functions.invoke(
-          "analyze-physics-page",
-          {
-            body: {
-              pageNumber,
-              imageDataUrl
-            }
-          }
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        console.log(
+          `🤖 AI trang ${pageNumber}, lần ${attempt}/${maxAttempts}`,
+          allowedQuestions.length
+            ? `| câu hợp lệ: ${allowedQuestions.map((item) => item.questionKey).join(", ")}`
+            : "| chưa có sourcePage mapping"
         );
 
-      if (error) {
-        let detail = "";
+        const { data, error } =
+          await window.supabaseClient.functions.invoke(
+            "analyze-physics-page",
+            {
+              body: {
+                pageNumber,
+                imageDataUrl,
+                questionsOnPage: allowedQuestions
+              }
+            }
+          );
 
-        try {
-          if (error.context) {
-            const payload =
-              await error.context.json();
+        if (error) {
+          let detail = "";
 
-            detail =
-              payload?.error ||
-              JSON.stringify(payload);
+          try {
+            if (error.context) {
+              const payload = await error.context.json();
+              detail = payload?.error || JSON.stringify(payload);
+            }
+          } catch {
+            // bỏ qua lỗi đọc chi tiết
           }
-        } catch {
-          // bỏ qua
+
+          throw new Error(
+            detail ||
+            error.message ||
+            `Không phân tích được trang ${pageNumber}.`
+          );
         }
 
-        throw new Error(
-          detail ||
-          error.message ||
-          `Không phân tích được trang ${pageNumber}.`
+        if (
+          !data?.result ||
+          typeof data.result !== "object" ||
+          !Array.isArray(data.result.questions)
+        ) {
+          throw new Error(
+            `AI trả JSON sai schema ở trang ${pageNumber}.`
+          );
+        }
+
+        console.log(`✅ AI trang ${pageNumber} thành công`);
+        return data.result;
+      } catch (error) {
+        lastError = error;
+
+        console.warn(
+          `⚠️ AI trang ${pageNumber} thất bại lần ${attempt}:`,
+          error?.message || String(error)
         );
-      }
 
-      if (
-        !data?.result ||
-        typeof data.result !== "object" ||
-        !Array.isArray(data.result.questions)
-      ) {
-        throw new Error(
-          `AI trả JSON sai schema ở trang ${pageNumber}.`
-        );
-      }
-
-      console.log(
-        `✅ AI trang ${pageNumber} thành công`
-      );
-
-      return data.result;
-    } catch (error) {
-      lastError = error;
-
-      console.warn(
-        `⚠️ AI trang ${pageNumber} thất bại lần ${attempt}:`,
-        error.message
-      );
-
-      if (attempt < maxAttempts) {
-        await new Promise(
-          resolve =>
-            setTimeout(
-              resolve,
-              1500 * attempt
-            )
-        );
+        if (attempt < maxAttempts) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, 1500 * attempt)
+          );
+        }
       }
     }
-  }
 
-  throw new Error(
-    `AI thất bại ${maxAttempts} lần ở trang ${pageNumber}: ` +
-    (lastError?.message || "Lỗi không xác định")
-  );
-}
+    throw new Error(
+      `AI thất bại ${maxAttempts} lần ở trang ${pageNumber}: ` +
+      (lastError?.message || "Lỗi không xác định")
+    );
+  }
 
   function clampPhysicsValue(value, min, max) {
     return Math.min(max, Math.max(min, Number(value) || 0));
@@ -3398,6 +3396,192 @@
     return "";
   }
 
+
+  function getQuestionsForSourcePage(examData, pageNumber) {
+    const page = Number(pageNumber);
+    const result = [];
+
+    const pushQuestion = (questionType, list, index) => {
+      const question = list?.[index];
+      if (!question || Number(question.sourcePage) !== page) return;
+
+      const number = index + 1;
+      const stemSource =
+        question.stem ||
+        question.context ||
+        question.topic ||
+        "";
+
+      result.push({
+        questionKey: `${questionType}-${number}`,
+        questionType,
+        number,
+        id: String(question.id || `${questionType}-${number}`),
+        sourcePage: page,
+        stem: String(stemSource || "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 220)
+      });
+    };
+
+    (examData?.mcq || []).forEach((_, index) =>
+      pushQuestion("mcq", examData.mcq, index)
+    );
+
+    (examData?.trueFalse || []).forEach((_, index) =>
+      pushQuestion("tf", examData.trueFalse, index)
+    );
+
+    (examData?.shortAnswer || []).forEach((_, index) =>
+      pushQuestion("short", examData.shortAnswer, index)
+    );
+
+    return result;
+  }
+
+  function findPhysicsExamQuestionByKey(examData, questionKey) {
+    const match = String(questionKey || "")
+      .trim()
+      .toLowerCase()
+      .match(/^(mcq|tf|short)-(\d+)$/);
+
+    if (!match) return null;
+
+    const questionType = match[1];
+    const number = Number(match[2]);
+    const index = number - 1;
+
+    if (!Number.isInteger(index) || index < 0) return null;
+
+    if (questionType === "mcq") {
+      return examData?.mcq?.[index] || null;
+    }
+
+    if (questionType === "tf") {
+      return examData?.trueFalse?.[index] || null;
+    }
+
+    if (questionType === "short") {
+      return examData?.shortAnswer?.[index] || null;
+    }
+
+    return null;
+  }
+
+  function resolveDetectedQuestionMapping(
+    examData,
+    detected,
+    pageNumber,
+    questionsOnPage
+  ) {
+    const allowed = Array.isArray(questionsOnPage)
+      ? questionsOnPage
+      : [];
+
+    const allowedByKey = new Map(
+      allowed.map((item) => [
+        String(item.questionKey || "").toLowerCase(),
+        item
+      ])
+    );
+
+    const explicitKey = String(
+      detected?.questionKey ||
+      detected?.question_key ||
+      ""
+    )
+      .trim()
+      .toLowerCase();
+
+    if (explicitKey && allowedByKey.has(explicitKey)) {
+      const meta = allowedByKey.get(explicitKey);
+      const question = findPhysicsExamQuestionByKey(
+        examData,
+        explicitKey
+      );
+
+      if (question) {
+        return {
+          ok: true,
+          question,
+          questionKey: explicitKey,
+          questionType: meta.questionType,
+          questionNumber: meta.number,
+          source: "questionKey",
+          needsReview: false
+        };
+      }
+    }
+
+    const detectedType = normalizeDetectedQuestionType(detected);
+    const detectedNumber = Number(detected?.number);
+
+    if (
+      detectedType &&
+      Number.isInteger(detectedNumber) &&
+      detectedNumber > 0
+    ) {
+      const detectedKey = `${detectedType}-${detectedNumber}`;
+
+      if (allowedByKey.has(detectedKey)) {
+        const meta = allowedByKey.get(detectedKey);
+        const question = findPhysicsExamQuestionByKey(
+          examData,
+          detectedKey
+        );
+
+        if (question) {
+          return {
+            ok: true,
+            question,
+            questionKey: detectedKey,
+            questionType: meta.questionType,
+            questionNumber: meta.number,
+            source: "type+number",
+            needsReview: false
+          };
+        }
+      }
+    }
+
+    // Nếu sourcePage nói rằng trang chỉ có đúng một câu,
+    // có thể map an toàn hơn dù AI đoán sai số câu/loại câu.
+    // Vẫn đánh dấu needsReview để giáo viên biết đây là fallback.
+    if (allowed.length === 1) {
+      const meta = allowed[0];
+      const key = String(meta.questionKey || "").toLowerCase();
+      const question = findPhysicsExamQuestionByKey(
+        examData,
+        key
+      );
+
+      if (question) {
+        return {
+          ok: true,
+          question,
+          questionKey: key,
+          questionType: meta.questionType,
+          questionNumber: meta.number,
+          source: "single-sourcePage-fallback",
+          needsReview: true
+        };
+      }
+    }
+
+    return {
+      ok: false,
+      question: null,
+      questionKey: "",
+      questionType: detectedType,
+      questionNumber: detectedNumber,
+      source: "unresolved",
+      needsReview: true,
+      pageNumber,
+      allowedQuestionKeys: allowed.map((item) => item.questionKey)
+    };
+  }
+
   function findPhysicsExamQuestion(examData, questionType, number) {
     const index = Number(number) - 1;
 
@@ -3439,26 +3623,37 @@
 
     const delayMs = Math.max(0, Number(options.delayMs ?? 900));
     const renderScale = Math.max(1, Number(options.renderScale ?? 2));
-    const minConfidence = Math.min(1, Math.max(0, Number(options.minConfidence ?? 0.65)));
+    const minConfidence = Math.min(
+      1,
+      Math.max(0, Number(options.minConfidence ?? 0.65))
+    );
     const dryRun = Boolean(options.dryRun);
 
     console.log("================================");
     console.log("🚀 BẮT ĐẦU XỬ LÝ HÌNH PDF");
     console.log("Đề:", examCode);
-    console.log("Chế độ:", dryRun ? "DRY RUN - không upload/ghi DB" : "UPLOAD + CẬP NHẬT DB");
+    console.log(
+      "Chế độ:",
+      dryRun
+        ? "DRY RUN - không upload/ghi DB"
+        : "UPLOAD + CẬP NHẬT DB"
+    );
 
-    const { data: examRow, error: examError } = await window.supabaseClient
-      .from("exams")
-      .select("id, code, exam_data")
-      .eq("code", examCode)
-      .single();
+    const { data: examRow, error: examError } =
+      await window.supabaseClient
+        .from("exams")
+        .select("id, code, exam_data")
+        .eq("code", examCode)
+        .single();
 
     if (examError) throw examError;
     if (!examRow) {
       throw new Error(`Không tìm thấy đề ${examCode}.`);
     }
 
-    const examData = structuredClone(examRow.exam_data || createEmptyExamData());
+    const examData = structuredClone(
+      examRow.exam_data || createEmptyExamData()
+    );
     const pdf = await loadPhysicsPdf(file);
 
     console.log(`📄 PDF có ${pdf.numPages} trang`);
@@ -3468,27 +3663,64 @@
       analyzedPages: 0,
       failedPages: 0,
       detectedVisuals: 0,
+      mappedVisuals: 0,
       uploaded: 0,
       skipped: 0,
       review: [],
       uploads: []
     };
 
-    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const pageResults = [];
+
+    for (
+      let pageNumber = 1;
+      pageNumber <= pdf.numPages;
+      pageNumber += 1
+    ) {
       console.log(`🔍 Trang ${pageNumber}/${pdf.numPages}`);
 
-      const pageCanvas = await renderPhysicsPdfPage(pdf, pageNumber, renderScale);
+      const questionsOnPage = getQuestionsForSourcePage(
+        examData,
+        pageNumber
+      );
+
+      console.log(
+        `📌 sourcePage ${pageNumber}:`,
+        questionsOnPage.map((item) => item.questionKey).join(", ") ||
+          "không có câu được map"
+      );
+
+      const pageCanvas = await renderPhysicsPdfPage(
+        pdf,
+        pageNumber,
+        renderScale
+      );
+
       let analysis;
 
       try {
-        analysis = await analyzePhysicsPageWithAi(pageCanvas, pageNumber);
+        analysis = await analyzePhysicsPageWithAi(
+          pageCanvas,
+          pageNumber,
+          questionsOnPage
+        );
         report.analyzedPages += 1;
       } catch (error) {
         console.error(`❌ AI lỗi trang ${pageNumber}:`, error);
         report.failedPages += 1;
-        report.review.push({
+
+        const failure = {
           page: pageNumber,
           reason: error?.message || String(error)
+        };
+
+        report.review.push(failure);
+        pageResults.push({
+          page: pageNumber,
+          questionsOnPage,
+          failed: true,
+          error: failure.reason,
+          detections: []
         });
 
         if (pageNumber < pdf.numPages && delayMs > 0) {
@@ -3501,83 +3733,138 @@
         ? analysis.questions
         : [];
 
+      const pageResult = {
+        page: pageNumber,
+        questionsOnPage,
+        failed: false,
+        detections: []
+      };
+
       for (const detected of questions) {
-        const questionType = normalizeDetectedQuestionType(detected);
-        const questionNumber = Number(detected?.number);
         const visuals = Array.isArray(detected?.visuals)
           ? detected.visuals
           : [];
 
         const imageVisuals = visuals.filter(
-          (visual) => String(visual?.type || "").toLowerCase() === "image" && visual?.bbox
+          (visual) =>
+            String(visual?.type || "").toLowerCase() === "image" &&
+            visual?.bbox
         );
 
         if (!imageVisuals.length) continue;
+
         report.detectedVisuals += imageVisuals.length;
 
-        if (!questionType || !Number.isInteger(questionNumber) || questionNumber <= 0) {
+        const mapping = resolveDetectedQuestionMapping(
+          examData,
+          detected,
+          pageNumber,
+          questionsOnPage
+        );
+
+        const detectionLog = {
+          aiQuestionKey: String(
+            detected?.questionKey ||
+            detected?.question_key ||
+            ""
+          ),
+          aiType: normalizeDetectedQuestionType(detected),
+          aiNumber: Number(detected?.number) || null,
+          visualCount: imageVisuals.length,
+          mappedQuestionKey: mapping.questionKey || "",
+          mappingSource: mapping.source,
+          needsReview: Boolean(mapping.needsReview)
+        };
+
+        pageResult.detections.push(detectionLog);
+
+        if (!mapping.ok || !mapping.question) {
+          console.warn(
+            `⚠️ Bỏ qua visual trang ${pageNumber}: AI trả`,
+            detectionLog.aiType || "?",
+            detectionLog.aiNumber || "?",
+            "| sourcePage chỉ cho phép:",
+            mapping.allowedQuestionKeys || []
+          );
+
           report.skipped += imageVisuals.length;
           report.review.push({
             page: pageNumber,
-            number: detected?.number ?? null,
-            type: detected?.questionType || "",
-            reason: "AI chưa xác định được questionType/part hoặc số câu hợp lệ."
+            aiType: detectionLog.aiType,
+            aiNumber: detectionLog.aiNumber,
+            allowedQuestionKeys:
+              mapping.allowedQuestionKeys || [],
+            reason:
+              "AI map câu không khớp sourcePage. Không tự gắn ảnh để tránh sai câu."
           });
           continue;
         }
 
-        const targetQuestion = findPhysicsExamQuestion(
-          examData,
-          questionType,
-          questionNumber
-        );
+        const targetQuestion = mapping.question;
+        const questionKey = mapping.questionKey;
+        const questionType = mapping.questionType;
+        const questionNumber = mapping.questionNumber;
 
-        if (!targetQuestion) {
-          console.warn("⚠️ Không tìm thấy câu:", questionType, questionNumber);
-          report.skipped += imageVisuals.length;
+        report.mappedVisuals += imageVisuals.length;
+
+        if (mapping.needsReview) {
+          targetQuestion.needsReview = true;
           report.review.push({
             page: pageNumber,
-            type: questionType,
-            number: questionNumber,
-            reason: "Không tìm thấy câu tương ứng trong exam_data."
+            questionKey,
+            reason:
+              "Đã dùng fallback sourcePage vì AI không trả đúng mã câu. Trang chỉ có một câu nên hệ thống vẫn có thể map, nhưng cần kiểm tra lại."
           });
-          continue;
         }
 
         const imageUrls = [];
         const visualMeta = [];
 
-        for (let visualIndex = 0; visualIndex < imageVisuals.length; visualIndex += 1) {
+        for (
+          let visualIndex = 0;
+          visualIndex < imageVisuals.length;
+          visualIndex += 1
+        ) {
           const visual = imageVisuals[visualIndex];
           const confidenceRaw = Number(visual?.confidence);
-          const confidence = Number.isFinite(confidenceRaw) ? confidenceRaw : 1;
-          const needsReview = Boolean(visual?.needsReview);
-          const handwritingOverlap = Boolean(visual?.handwritingOverlap);
+          const confidence = Number.isFinite(confidenceRaw)
+            ? confidenceRaw
+            : 1;
+          const needsReview =
+            Boolean(visual?.needsReview) ||
+            Boolean(mapping.needsReview);
+          const handwritingOverlap = Boolean(
+            visual?.handwritingOverlap
+          );
 
           if (confidence < minConfidence) {
             console.warn(
-              `⚠️ Confidence thấp: trang ${pageNumber}, ${questionType} câu ${questionNumber}`
+              `⚠️ Confidence thấp: trang ${pageNumber}, ${questionKey}`
             );
+
             report.skipped += 1;
             report.review.push({
               page: pageNumber,
-              type: questionType,
-              number: questionNumber,
+              questionKey,
               confidence,
-              reason: "AI nhận diện hình với độ tin cậy thấp."
+              reason:
+                "AI nhận diện hình với độ tin cậy thấp."
             });
             continue;
           }
 
           let crop;
+
           try {
-            crop = cropPhysicsVisual(pageCanvas, visual.bbox);
+            crop = cropPhysicsVisual(
+              pageCanvas,
+              visual.bbox
+            );
           } catch (error) {
             report.skipped += 1;
             report.review.push({
               page: pageNumber,
-              type: questionType,
-              number: questionNumber,
+              questionKey,
               reason: error?.message || String(error)
             });
             continue;
@@ -3585,32 +3872,40 @@
 
           if (dryRun) {
             visualMeta.push({
-              description: String(visual?.description || ""),
+              questionKey,
+              description: String(
+                visual?.description || ""
+              ),
               confidence,
               handwritingOverlap,
               needsReview,
               bbox: visual.bbox,
               imageUrl: ""
             });
+
             console.log(
-              `🧪 DRY RUN: ${questionType} câu ${questionNumber}, hình ${visualIndex + 1}`
+              `🧪 DRY RUN: ${questionKey}, hình ${visualIndex + 1} | map=${mapping.source}`
             );
             continue;
           }
 
           try {
-            const uploaded = await uploadPhysicsVisual({
-              canvas: crop,
-              examCode,
-              pageNumber,
-              questionType,
-              questionNumber,
-              visualIndex
-            });
+            const uploaded =
+              await uploadPhysicsVisual({
+                canvas: crop,
+                examCode,
+                pageNumber,
+                questionType,
+                questionNumber,
+                visualIndex
+              });
 
             imageUrls.push(uploaded.imageUrl);
             visualMeta.push({
-              description: String(visual?.description || ""),
+              questionKey,
+              description: String(
+                visual?.description || ""
+              ),
               confidence,
               handwritingOverlap,
               needsReview,
@@ -3622,6 +3917,7 @@
             report.uploaded += 1;
             report.uploads.push({
               page: pageNumber,
+              questionKey,
               type: questionType,
               number: questionNumber,
               imageUrl: uploaded.imageUrl,
@@ -3629,7 +3925,7 @@
             });
 
             console.log(
-              `✅ ${questionType} câu ${questionNumber}, hình ${visualIndex + 1}:`,
+              `✅ ${questionKey}, hình ${visualIndex + 1}:`,
               uploaded.imageUrl
             );
           } catch (error) {
@@ -3637,47 +3933,68 @@
             console.error("Upload ảnh lỗi:", error);
             report.review.push({
               page: pageNumber,
-              type: questionType,
-              number: questionNumber,
+              questionKey,
               reason: error?.message || String(error)
             });
           }
         }
 
         if (imageUrls.length) {
-          const existingUrls = Array.isArray(targetQuestion.imageUrls)
-            ? targetQuestion.imageUrls.map(String).filter(Boolean)
+          const existingUrls = Array.isArray(
+            targetQuestion.imageUrls
+          )
+            ? targetQuestion.imageUrls
+                .map(String)
+                .filter(Boolean)
             : [];
 
           const mergedUrls = [...existingUrls];
           imageUrls.forEach((url) => {
-            if (!mergedUrls.includes(url)) mergedUrls.push(url);
+            if (!mergedUrls.includes(url)) {
+              mergedUrls.push(url);
+            }
           });
 
           targetQuestion.imageRequired = true;
-          targetQuestion.imageUrl = mergedUrls[0] || imageUrls[0];
+          targetQuestion.imageUrl =
+            mergedUrls[0] || imageUrls[0];
           targetQuestion.imageUrls = mergedUrls;
-          targetQuestion.imageCaption = targetQuestion.imageCaption || "Hình minh họa cho câu hỏi";
+          targetQuestion.imageCaption =
+            targetQuestion.imageCaption ||
+            "Hình minh họa cho câu hỏi";
           targetQuestion.visualImageMeta = [
-            ...(Array.isArray(targetQuestion.visualImageMeta)
+            ...(Array.isArray(
+              targetQuestion.visualImageMeta
+            )
               ? targetQuestion.visualImageMeta
               : []),
             ...visualMeta
           ];
         }
 
-        if (imageVisuals.some((visual) => visual?.handwritingOverlap || visual?.needsReview)) {
+        if (
+          imageVisuals.some(
+            (visual) =>
+              visual?.handwritingOverlap ||
+              visual?.needsReview
+          )
+        ) {
           targetQuestion.needsReview = true;
           report.review.push({
             page: pageNumber,
-            type: questionType,
-            number: questionNumber,
-            reason: "AI phát hiện hình cần giáo viên kiểm tra lại."
+            questionKey,
+            reason:
+              "AI phát hiện hình cần giáo viên kiểm tra lại."
           });
         }
       }
 
-      if (pageNumber < pdf.numPages && delayMs > 0) {
+      pageResults.push(pageResult);
+
+      if (
+        pageNumber < pdf.numPages &&
+        delayMs > 0
+      ) {
         await waitPhysicsImport(delayMs);
       }
     }
@@ -3685,33 +4002,48 @@
     if (!dryRun) {
       console.log("💾 Đang lưu exam_data...");
 
-      const { data: updated, error: updateError } = await window.supabaseClient
-        .from("exams")
-        .update({ exam_data: examData })
-        .eq("id", examRow.id)
-        .select("id, code")
-        .single();
+      const { data: updated, error: updateError } =
+        await window.supabaseClient
+          .from("exams")
+          .update({
+            exam_data: examData
+          })
+          .eq("id", examRow.id)
+          .select("id, code")
+          .single();
 
       if (updateError) throw updateError;
 
       console.log("✅ ĐÃ HOÀN THÀNH", updated);
-      if (report.review.length) console.table(report.review);
+
+      if (report.review.length) {
+        console.table(report.review);
+      }
+
       console.log("📊 BÁO CÁO:", report);
 
       return {
         updated,
         report,
+        pageResults,
         examData
       };
     }
 
-    console.log("🧪 DRY RUN hoàn tất. Không upload ảnh và không sửa database.");
-    if (report.review.length) console.table(report.review);
+    console.log(
+      "🧪 DRY RUN hoàn tất. Không upload ảnh và không sửa database."
+    );
+
+    if (report.review.length) {
+      console.table(report.review);
+    }
+
     console.log("📊 BÁO CÁO:", report);
 
     return {
       updated: null,
       report,
+      pageResults,
       examData
     };
   }
@@ -3721,6 +4053,9 @@
   window.resizeCanvasForAi = resizeCanvasForAi;
   window.canvasToAiImage = canvasToAiImage;
   window.analyzePhysicsPageWithAi = analyzePhysicsPageWithAi;
+  window.getQuestionsForSourcePage = getQuestionsForSourcePage;
+  window.findPhysicsExamQuestionByKey = findPhysicsExamQuestionByKey;
+  window.resolveDetectedQuestionMapping = resolveDetectedQuestionMapping;
   window.cropPhysicsVisual = cropPhysicsVisual;
   window.processAllPhysicsPdfVisuals = processAllPhysicsPdfVisuals;
 
